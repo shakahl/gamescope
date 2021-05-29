@@ -71,6 +71,7 @@ void sig_handler(int signal)
 	if ( signal == SIGUSR2 )
 	{
 		g_bTakeScreenshot = true;
+		nudge_steamcompmgr();
 		return;
 	}
 

@@ -139,6 +139,7 @@ typedef struct _win {
 	struct wlserver_surface surface;
 
 	std::vector< commit_t > commit_queue;
+	uint32_t pending_retained_buffer_resource_id;
 } win;
 
 static win		*list;
@@ -667,6 +668,8 @@ get_window_last_done_commit( win *w, commit_t &commit )
 	{
 		return false;
 	}
+	
+	fprintf( stderr, "drawing commit %lu\n", w->commit_queue[ lastCommit ].commitID );
 
 	commit = w->commit_queue[ lastCommit ];
 	return true;
@@ -1282,11 +1285,11 @@ paint_all(Display *dpy, MouseCursor *cursor)
 	bool bDoComposite = true;
 
 	// Handoff from whatever thread to this one since we check ours twice
-	if ( g_bTakeScreenshot == true )
-	{
-		takeScreenshot = true;
-		g_bTakeScreenshot = false;
-	}
+// 	if ( g_bTakeScreenshot == true )
+// 	{
+// 		takeScreenshot = true;
+// 		g_bTakeScreenshot = false;
+// 	}
 
 	if ( BIsNested() == false && alwaysComposite == False && takeScreenshot == False )
 	{
@@ -2164,6 +2167,8 @@ add_win (Display *dpy, Window id, Window prev, unsigned long sequence)
 	new_win->ignoreOverrideRedirect = False;
 
 	new_win->mouseMoved = False;
+	
+	new_win->pending_retained_buffer_resource_id = 0;
 
 	wlserver_surface_init( &new_win->surface, id );
 
@@ -2828,14 +2833,14 @@ register_systray(Display *dpy)
 	XSetSelectionOwner(dpy, net_system_tray, ourWindow, 0);
 }
 
-void handle_done_commits( void )
+void handle_done_commits( bool &vblank )
 {
 	std::lock_guard<std::mutex> lock( listCommitsDoneLock );
 
 	// very fast loop yes
 	for ( uint32_t i = 0; i < listCommitsDone.size(); i++ )
 	{
-		bool bFoundWindow = false;
+// 		bool bFoundWindow = false;
 		for ( win *w = list; w; w = w->next )
 		{
 			uint32_t j;
@@ -2843,9 +2848,21 @@ void handle_done_commits( void )
 			{
 				if ( w->commit_queue[ j ].commitID == listCommitsDone[ i ] )
 				{
-					gpuvis_trace_printf( "commit %lu done", w->commit_queue[ j ].commitID );
 					w->commit_queue[ j ].done = true;
-					bFoundWindow = true;
+// 					bFoundWindow = true;
+					
+					struct wlr_client_buffer *client_buf = (struct wlr_client_buffer *) w->commit_queue[ j ].buf;
+					wlserver_lock();
+					uint32_t id = wl_resource_get_id(client_buf->resource);
+					wlserver_unlock();
+					fprintf( stderr, "commit %lu done resource id %u\n", w->commit_queue[ j ].commitID, id );
+					
+					if ( id == w->pending_retained_buffer_resource_id )
+					{
+						fprintf( stderr, "launch %u found, drawing\n", id );
+						w->pending_retained_buffer_resource_id = 0;
+						vblank = true;
+					}
 
 					// Window just got a new available commit, determine if that's worth a repaint
 
@@ -2878,19 +2895,19 @@ void handle_done_commits( void )
 				}
 			}
 
-			if ( bFoundWindow == true )
-			{
-				if ( j > 0 )
-				{
-					// we can release all commits prior to done ones
-					for ( uint32_t k = 0; k < j; k++ )
-					{
-						release_commit( w->commit_queue[ k ] );
-					}
-					w->commit_queue.erase( w->commit_queue.begin(), w->commit_queue.begin() + j );
-				}
-				break;
-			}
+// 			if ( bFoundWindow == true )
+// 			{
+// 				if ( j > 0 )
+// 				{
+// 					// we can release all commits prior to done ones
+// 					for ( uint32_t k = 0; k < j; k++ )
+// 					{
+// 						release_commit( w->commit_queue[ k ] );
+// 					}
+// 					w->commit_queue.erase( w->commit_queue.begin(), w->commit_queue.begin() + j );
+// 				}
+// 				break;
+// 			}
 		}
 	}
 
@@ -3390,7 +3407,7 @@ steamcompmgr_main (int argc, char **argv)
 						else
 						{
 							gpuvis_trace_printf( "got vblank" );
-							vblank = true;
+// 							vblank = true;
 						}
 					}
 					break;
@@ -3463,9 +3480,34 @@ steamcompmgr_main (int argc, char **argv)
 				currentOutputHeight = g_nOutputHeight;
 			}
 
-			handle_done_commits();
+			handle_done_commits( vblank );
 
 			check_new_wayland_res();
+			
+			if ( g_bTakeScreenshot )
+			{
+				win *w = find_win( dpy, currentInputFocusWindow );
+				
+				if ( w && w->commit_queue.size() && w->commit_queue[ 0 ].done )
+				{
+					struct wlr_client_buffer *client_buf = (struct wlr_client_buffer *) w->commit_queue[ 0 ].buf;
+					wlserver_lock();
+					uint32_t id = wl_resource_get_id(client_buf->resource);
+					wlserver_unlock();
+					
+					release_commit( w->commit_queue[ 0 ] );
+					fprintf( stderr, "releasing resource %u\n", id );
+					
+					if ( w->pending_retained_buffer_resource_id != 0 )
+						fprintf( stderr, "launch already in flight!\n" );
+
+					w->pending_retained_buffer_resource_id = id;
+					
+					w->commit_queue.erase( w->commit_queue.begin(), w->commit_queue.begin() + 1 );
+				}
+				
+				g_bTakeScreenshot = false;
+			}
 
 			if ( hasRepaint == true && vblank == true )
 			{
