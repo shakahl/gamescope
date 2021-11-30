@@ -1167,6 +1167,46 @@ drm_prepare_liftoff( struct drm_t *drm, const struct Composite_t *pComposite, co
 	return ret;
 }
 
+static void fill_empty_gamma_table(size_t size,
+		uint16_t *r, uint16_t *g, uint16_t *b) {
+	assert(0xFFFF < UINT64_MAX / (size - 1));
+	for (uint32_t i = 0; i < size; ++i) {
+		uint16_t val = (uint64_t)0xFFFF * i / (size - 1);
+		r[i] = g[i] = b[i] = val;
+	}
+}
+
+bool drm_legacy_crtc_set_gamma(struct drm_t *drm,
+		struct crtc *crtc, size_t size, uint16_t *lut) {
+	uint16_t *linear_lut = NULL;
+	if (size == 0) {
+		// The legacy interface doesn't offer a way to reset the gamma LUT
+		size = 256;// drm_crtc_get_gamma_lut_size(drm, crtc);
+		if (size == 0) {
+			return false;
+		}
+
+		linear_lut = (uint16_t*) malloc(3 * size * sizeof(uint16_t));
+		if (linear_lut == NULL) {
+			return false;
+		}
+		fill_empty_gamma_table(size, linear_lut, linear_lut + size,
+			linear_lut + 2 * size);
+
+		lut = linear_lut;
+	}
+
+	uint16_t *r = lut, *g = lut + size, *b = lut + 2 * size;
+	if (drmModeCrtcSetGamma(drm->fd, crtc->id, size, r, g, b) != 0) {
+		free(linear_lut);
+		return false;
+	}
+
+	free(linear_lut);
+	return true;
+}
+
+
 /* Prepares an atomic commit for the provided scene-graph. Returns false on
  * error or if the scene-graph can't be presented directly. */
 int drm_prepare( struct drm_t *drm, const struct Composite_t *pComposite, const struct VulkanPipeline_t *pPipeline )
@@ -1214,6 +1254,9 @@ int drm_prepare( struct drm_t *drm, const struct Composite_t *pComposite, const 
 			return false;
 		if (add_crtc_property(drm->req, drm->crtc, "ACTIVE", 1) < 0)
 			return false;
+
+		drm_legacy_crtc_set_gamma(drm, drm->crtc, 0, NULL);
+		
 		drm->crtc->pending.active = 1;
 	}
 
