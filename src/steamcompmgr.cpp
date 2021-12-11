@@ -104,6 +104,7 @@ struct commit_t
 	VulkanTexture_t vulkanTex;
 	uint64_t commitID;
 	bool done;
+	bool held;
 };
 
 std::mutex listCommitsDoneLock;
@@ -259,6 +260,15 @@ static Atom		gamescopeFocusedAppAtom;
 static Atom		gamescopeCtrlAppIDAtom;
 static Atom		gamescopeCtrlWindowAtom;
 static Atom		gamescopeInputCounterAtom;
+
+enum HeldCommitTypes_t
+{
+	HELD_COMMIT_BASE,
+
+	HELD_COMMIT_COUNT,
+};
+
+std::array<commit_t, HELD_COMMIT_COUNT> g_HeldCommits;
 
 /* opacity property name; sometime soon I'll write up an EWMH spec for it */
 #define OPACITY_PROP		"_NET_WM_WINDOW_OPACITY"
@@ -3277,7 +3287,8 @@ void handle_done_commits( void )
 					// we can release all commits prior to done ones
 					for ( uint32_t k = 0; k < j; k++ )
 					{
-						release_commit( w->commit_queue[ k ] );
+						if ( !w->commit_queue[ k ].held )
+							release_commit( w->commit_queue[ k ] );
 					}
 					w->commit_queue.erase( w->commit_queue.begin(), w->commit_queue.begin() + j );
 				}
