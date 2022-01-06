@@ -160,6 +160,12 @@ struct win {
 	std::vector< std::shared_ptr<commit_t> > commit_queue;
 };
 
+Window x11_win(win *w) {
+	if (w == nullptr)
+		return None;
+	return w->id;
+}
+
 uint32_t		currentOutputWidth, currentOutputHeight;
 
 bool hasFocusWindow;
@@ -747,7 +753,7 @@ void MouseCursor::checkSuspension()
 	if (!m_hideForMovement && suspended) {
 		m_hideForMovement = true;
 
-		win *window = find_win(m_ctx, m_ctx->currentInputFocusWindow);
+		win *window = m_ctx->currentInputFocusWindow;
 
 		// Rearm warp count
 		if (window) {
@@ -764,7 +770,7 @@ void MouseCursor::checkSuspension()
 
 void MouseCursor::warp(int x, int y)
 {
-	XWarpPointer(m_ctx->dpy, None, m_ctx->currentInputFocusWindow, 0, 0, 0, 0, x, y);
+	XWarpPointer(m_ctx->dpy, None, x11_win(m_ctx->currentInputFocusWindow), 0, 0, 0, 0, x, y);
 }
 
 void MouseCursor::resetPosition()
@@ -855,7 +861,7 @@ error_image:
 void MouseCursor::constrainPosition()
 {
 	int i;
-	win *window = find_win(m_ctx, m_ctx->currentInputFocusWindow);
+	win *window = m_ctx->currentInputFocusWindow;
 
 	// If we had barriers before, get rid of them.
 	for (i = 0; i < 4; i++) {
@@ -898,7 +904,7 @@ void MouseCursor::move(int x, int y)
 	m_x = x;
 	m_y = y;
 
-	win *window = find_win(m_ctx, m_ctx->currentInputFocusWindow);
+	win *window = m_ctx->currentInputFocusWindow;
 
 	if (window) {
 		// If mouse moved and we're on the hook for showing the cursor, repaint
@@ -1161,7 +1167,7 @@ paint_window(xwayland_ctx_t *ctx, win *w, win *scaleW, struct Composite_t *pComp
 	// Base plane will stay as tex=0 if we don't have contents yet, which will
 	// make us fall back to compositing and use the Vulkan null texture
 
-	win *mainOverlayWindow = find_win(ctx, ctx->currentOverlayWindow);
+	win *mainOverlayWindow = ctx->currentOverlayWindow;
 
 	const bool notificationMode = flags & PaintWindowFlag::NotificationMode;
 	if (notificationMode && !mainOverlayWindow)
@@ -1323,12 +1329,12 @@ paint_all(xwayland_ctx_t *ctx, MouseCursor *cursor)
 	unsigned int currentTime = get_time_in_milliseconds();
 	bool fadingOut = ( currentTime - fadeOutStartTime < g_FadeOutDuration || g_bPendingFade ) && g_HeldCommits[HELD_COMMIT_FADE];
 
-	w = find_win(ctx, ctx->currentFocusWindow);
-	overlay = find_win(ctx, ctx->currentOverlayWindow);
-	externalOverlay = find_win(ctx, ctx->currentExternalOverlayWindow);
-	notification = find_win(ctx, ctx->currentNotificationWindow);
-	override = find_win(ctx, ctx->currentOverrideWindow);
-	input = find_win(ctx, ctx->currentInputFocusWindow);
+	w = ctx->currentFocusWindow;
+	overlay = ctx->currentOverlayWindow;
+	externalOverlay = ctx->currentExternalOverlayWindow;
+	notification = ctx->currentNotificationWindow;
+	override = ctx->currentOverrideWindow;
+	input = ctx->currentInputFocusWindow;
 
 	if ( !w )
 	{
@@ -1440,7 +1446,7 @@ paint_all(xwayland_ctx_t *ctx, MouseCursor *cursor)
 		{
 			paint_window(ctx, externalOverlay, externalOverlay, &composite, &pipeline, cursor, PaintWindowFlag::NoScale);
 
-			if ( externalOverlay->id == ctx->currentInputFocusWindow )
+			if ( externalOverlay == ctx->currentInputFocusWindow )
 				update_touch_scaling( &composite );
 		}
 	}
@@ -1451,7 +1457,7 @@ paint_all(xwayland_ctx_t *ctx, MouseCursor *cursor)
 		{
 			paint_window(ctx, overlay, overlay, &composite, &pipeline, cursor, PaintWindowFlag::DrawBorders);
 
-			if ( overlay->id == ctx->currentInputFocusWindow )
+			if ( overlay == ctx->currentInputFocusWindow )
 				update_touch_scaling( &composite );
 		}
 	}
@@ -1780,16 +1786,16 @@ determine_and_apply_focus(xwayland_ctx_t *ctx)
 
 	gameFocused = false;
 
-	Window prevFocusWindow = ctx->currentFocusWindow;
-	Window prevOverlayWindow = ctx->currentOverlayWindow;
-	Window prevExternalOverlayWindow = ctx->currentExternalOverlayWindow;
-	Window prevNotificationWindow = ctx->currentNotificationWindow;
-	Window prevOverrideWindow = ctx->currentOverrideWindow;
-	ctx->currentFocusWindow = None;
-	ctx->currentFocusWin = nullptr;
-	ctx->currentOverlayWindow = None;
-	ctx->currentNotificationWindow = None;
-	ctx->currentOverrideWindow = None;
+	win *prevFocusWindow = ctx->currentFocusWindow;
+	win *prevOverlayWindow = ctx->currentOverlayWindow;
+	win *prevExternalOverlayWindow = ctx->currentExternalOverlayWindow;
+	win *prevNotificationWindow = ctx->currentNotificationWindow;
+	win *prevOverrideWindow = ctx->currentOverrideWindow;
+	ctx->currentFocusWindow = nullptr;
+	ctx->currentOverlayWindow = nullptr;
+	ctx->currentExternalOverlayWindow = nullptr;
+	ctx->currentNotificationWindow = nullptr;
+	ctx->currentOverrideWindow = nullptr;
 
 	unsigned int maxOpacity = 0;
 	unsigned int maxOpacityExternal = 0;
@@ -1813,12 +1819,12 @@ determine_and_apply_focus(xwayland_ctx_t *ctx)
 		{
 			if (w->a.width > 1200 && w->opacity >= maxOpacity)
 			{
-				ctx->currentOverlayWindow = w->id;
+				ctx->currentOverlayWindow = w;
 				maxOpacity = w->opacity;
 			}
 			else
 			{
-				ctx->currentNotificationWindow = w->id;
+				ctx->currentNotificationWindow = w;
 			}
 		}
 
@@ -1826,7 +1832,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx)
 		{
 			if (w->opacity >= maxOpacityExternal)
 			{
-				ctx->currentExternalOverlayWindow = w->id;
+				ctx->currentExternalOverlayWindow = w;
 				maxOpacityExternal = w->opacity;
 			}
 		}
@@ -1992,7 +1998,7 @@ found:
 	}
 
 
-	ctx->currentOverrideWindow = override_focus ? override_focus->id : None;
+	ctx->currentOverrideWindow = override_focus;
 
 	if ( ctx->currentOverrideWindow != prevOverrideWindow )
 		hasRepaint = true;
@@ -2022,7 +2028,7 @@ found:
 		return;
 	}
 
-	if ( prevFocusWindow != focus->id )
+	if ( prevFocusWindow != focus )
 	{
 		if ( g_FadeOutDuration != 0 && !g_bFirstFrame )
 		{
@@ -2035,12 +2041,12 @@ found:
 			else
 			{
 				// If we end up fading back to what we were going to fade to, cancel the fade.
-				if ( ctx->currentFadeWindow != None && focus->id == ctx->currentFadeWindow )
+				if ( ctx->currentFadeWindow != None && focus == ctx->currentFadeWindow )
 				{
 					g_HeldCommits[ HELD_COMMIT_FADE ] = nullptr;
 					g_bPendingFade = false;
 					fadeOutStartTime = 0;
-					ctx->currentFadeWindow = None;
+					ctx->currentFadeWindow = nullptr;
 				}
 			}
 		}
@@ -2065,10 +2071,9 @@ found:
 		}
 	}
 
-	ctx->currentFocusWindow = focus->id;
-	ctx->currentFocusWin = focus;
+	ctx->currentFocusWindow = focus;
 
-	if ( ctx->currentInputFocusWindow != inputFocus->id ||
+	if ( ctx->currentInputFocusWindow != inputFocus ||
 		ctx->currentInputFocusMode != inputFocus->inputFocusMode )
 	{
 		win *keyboardFocusWin = inputFocus;
@@ -2103,7 +2108,7 @@ found:
 		if ( !override_focus || override_focus != keyboardFocusWin )
 			XSetInputFocus(ctx->dpy, keyboardFocusWin->id, RevertToNone, CurrentTime);
 
-		ctx->currentInputFocusWindow = inputFocus->id;
+		ctx->currentInputFocusWindow = inputFocus;
 		ctx->currentInputFocusMode = inputFocus->inputFocusMode;
 		ctx->currentKeyboardFocusWindow = keyboardFocusWin->id;
 
@@ -2739,23 +2744,20 @@ finish_destroy_win(xwayland_ctx_t *ctx, Window id, bool gone)
 static void
 destroy_win(xwayland_ctx_t *ctx, Window id, bool gone, bool fade)
 {
-	if (ctx->currentFocusWindow == id && gone)
-	{
-		ctx->currentFocusWindow = None;
-		ctx->currentFocusWin = nullptr;
-	}
-	if (ctx->currentFadeWindow == id && gone)
-		ctx->currentFadeWindow = None;
-	if (ctx->currentInputFocusWindow == id && gone)
-		ctx->currentInputFocusWindow = None;
-	if (ctx->currentOverlayWindow == id && gone)
-		ctx->currentOverlayWindow = None;
-	if (ctx->currentExternalOverlayWindow == id && gone)
-		ctx->currentExternalOverlayWindow = None;
-	if (ctx->currentNotificationWindow == id && gone)
-		ctx->currentNotificationWindow = None;
-	if (ctx->currentOverrideWindow == id && gone)
-		ctx->currentOverrideWindow = None;
+	if (x11_win(ctx->currentFocusWindow) == id && gone)
+		ctx->currentFocusWindow = nullptr;
+	if (x11_win(ctx->currentFadeWindow) == id && gone)
+		ctx->currentFadeWindow = nullptr;
+	if (x11_win(ctx->currentInputFocusWindow) == id && gone)
+		ctx->currentInputFocusWindow = nullptr;
+	if (x11_win(ctx->currentOverlayWindow) == id && gone)
+		ctx->currentOverlayWindow = nullptr;
+	if (x11_win(ctx->currentExternalOverlayWindow) == id && gone)
+		ctx->currentExternalOverlayWindow = nullptr;
+	if (x11_win(ctx->currentNotificationWindow) == id && gone)
+		ctx->currentNotificationWindow = nullptr;
+	if (x11_win(ctx->currentOverrideWindow) == id && gone)
+		ctx->currentOverrideWindow = nullptr;
 	if (ctx->currentKeyboardFocusWindow == id && gone)
 		ctx->currentKeyboardFocusWindow = None;
 	focusDirty = true;
@@ -2767,7 +2769,7 @@ static void
 damage_win(xwayland_ctx_t *ctx, XDamageNotifyEvent *de)
 {
 	win	*w = find_win(ctx, de->drawable);
-	win *focus = find_win(ctx, ctx->currentFocusWindow);
+	win *focus = ctx->currentFocusWindow;
 
 	if (!w)
 		return;
@@ -2817,16 +2819,15 @@ handle_wl_surface_id(xwayland_ctx_t *ctx, win *w, long surfaceID)
 
 	// If we already focused on our side and are handling this late,
 	// let wayland know now.
-	if ( w->id == ctx->currentInputFocusWindow )
+	if ( w == ctx->currentInputFocusWindow )
 		wlserver_mousefocus( surface );
 
-	win *inputFocusWin = find_win( ctx, ctx->currentInputFocusWindow, false );
-	Window keyboardFocusWindow = ctx->currentInputFocusWindow;
+	win *keyboardFocusWindow = ctx->currentInputFocusWindow;
 
-	if ( inputFocusWin && inputFocusWin->inputFocusMode )
+	if ( keyboardFocusWindow && keyboardFocusWindow->inputFocusMode )
 		keyboardFocusWindow = ctx->currentFocusWindow;
 
-	if ( w->id == keyboardFocusWindow )
+	if ( w == keyboardFocusWindow )
 		wlserver_keyboardfocus( surface );
 
 	// Pull the first buffer out of that window, if needed
@@ -2970,11 +2971,11 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 			{
 				w->opacity = newOpacity;
 
-				if ( gameFocused && ( w->id == ctx->currentOverlayWindow || w->id == ctx->currentNotificationWindow ) )
+				if ( gameFocused && ( w == ctx->currentOverlayWindow || w == ctx->currentNotificationWindow ) )
 				{
 					hasRepaint = true;
 				}
-				if ( w->id == ctx->currentExternalOverlayWindow )
+				if ( w == ctx->currentExternalOverlayWindow )
 				{
 					hasRepaint = true;
 				}
@@ -2989,7 +2990,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 				{
 					if (w->a.width > 1200 && w->opacity >= maxOpacity)
 					{
-						ctx->currentOverlayWindow = w->id;
+						ctx->currentOverlayWindow = w;
 						maxOpacity = w->opacity;
 					}
 				}
@@ -2997,7 +2998,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 				{
 					if (w->opacity >= maxOpacityExternal)
 					{
-						ctx->currentExternalOverlayWindow = w->id;
+						ctx->currentExternalOverlayWindow = w;
 						maxOpacityExternal = w->opacity;
 					}
 				}
@@ -3117,9 +3118,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 
 		globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 
-		win *w;
-
-		if ((w = find_win(ctx, ctx->currentFocusWindow)))
+		if (ctx->currentFocusWindow)
 		{
 			hasRepaint = true;
 		}
@@ -3132,9 +3131,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 
 		globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 
-		win *w;
-
-		if ((w = find_win(ctx, ctx->currentFocusWindow)))
+		if (ctx->currentFocusWindow)
 		{
 			hasRepaint = true;
 		}
@@ -3160,7 +3157,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 	}
 	if (ev->atom == XA_WM_NAME || ev->atom == ctx->atoms.netWMNameAtom)
 	{
-		if (ev->window == ctx->currentFocusWindow)
+		if (ev->window == x11_win(ctx->currentFocusWindow))
 		{
 			win *w = find_win(ctx, ev->window);
 			if (w) {
@@ -3359,23 +3356,23 @@ void handle_done_commits( xwayland_ctx_t *ctx )
 					// If this is an overlay that we're presenting, repaint
 					if ( gameFocused )
 					{
-						if ( w->id == ctx->currentOverlayWindow && w->opacity != TRANSLUCENT )
+						if ( w == ctx->currentOverlayWindow && w->opacity != TRANSLUCENT )
 						{
 							hasRepaint = true;
 						}
 
-						if ( w->id == ctx->currentNotificationWindow && w->opacity != TRANSLUCENT )
+						if ( w == ctx->currentNotificationWindow && w->opacity != TRANSLUCENT )
 						{
 							hasRepaint = true;
 						}
 					}
 					// If this is an external overlay, repaint
-					if ( w->id == ctx->currentExternalOverlayWindow && w->opacity != TRANSLUCENT )
+					if ( w == ctx->currentExternalOverlayWindow && w->opacity != TRANSLUCENT )
 					{
 						hasRepaint = true;
 					}
 					// If this is the main plane, repaint
-					if ( w->id == ctx->currentFocusWindow && !w->isSteamStreamingClient )
+					if ( w == ctx->currentFocusWindow && !w->isSteamStreamingClient )
 					{
 						// TODO: Check for a mangoapp atom in future.
 						// (Needs the win* refactor from the multiple xwayland branch)
@@ -3385,12 +3382,12 @@ void handle_done_commits( xwayland_ctx_t *ctx )
 						hasRepaint = true;
 					}
 
-					if ( w->id == ctx->currentOverrideWindow )
+					if ( w == ctx->currentOverrideWindow )
 					{
 						hasRepaint = true;
 					}
 
-					if ( w->isSteamStreamingClientVideo && ctx->currentFocusWin && ctx->currentFocusWin->isSteamStreamingClient )
+					if ( w->isSteamStreamingClientVideo && ctx->currentFocusWindow && ctx->currentFocusWindow->isSteamStreamingClient )
 					{
 						if (ctx->currentExternalOverlayWindow != None)
 							mangoapp_update();
@@ -3731,7 +3728,7 @@ dispatch_x11( xwayland_ctx_t *ctx )
 				handle_client_message(ctx, &ev.xclient);
 				break;
 			case LeaveNotify:
-				if (ev.xcrossing.window == ctx->currentInputFocusWindow)
+				if (ev.xcrossing.window == x11_win(ctx->currentInputFocusWindow))
 				{
 					// Josh: need to defer this as we could have a destroy later on
 					// and end up submitting commands with the currentInputFocusWIndow
@@ -3741,7 +3738,7 @@ dispatch_x11( xwayland_ctx_t *ctx )
 			case MotionNotify:
 				{
 					win * w = find_win(ctx, ev.xmotion.window);
-					if (w && w->id == ctx->currentInputFocusWindow)
+					if (w && w == ctx->currentInputFocusWindow)
 					{
 						cursor->move(ev.xmotion.x, ev.xmotion.y);
 					}
