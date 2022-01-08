@@ -2059,6 +2059,14 @@ found:
 	XFree(children);
 }
 
+wlr_surface *win_surface(win *window)
+{
+	if (!window)
+		return nullptr;
+
+	return window->surface.wlr;
+}
+
 static void
 determine_and_apply_focus()
 {
@@ -2186,11 +2194,11 @@ found:
 	if ( global_focus.inputFocusWindow    != previous_focus.inputFocusWindow ||
 		 global_focus.keyboardFocusWindow != previous_focus.keyboardFocusWindow )
 	{
-		if ( (global_focus.inputFocusWindow && global_focus.inputFocusWindow->surface.wlr != nullptr) ||
-			 (global_focus.keyboardFocusWindow && global_focus.keyboardFocusWindow->surface.wlr != nullptr) )
+		if ( win_surface(global_focus.inputFocusWindow)    != nullptr ||
+			 win_surface(global_focus.keyboardFocusWindow) != nullptr )
 		{
 			wlserver_lock();
-			if ( global_focus.inputFocusWindow && global_focus.inputFocusWindow->surface.wlr != nullptr )
+			if ( win_surface(global_focus.inputFocusWindow) != nullptr )
 			{
 				// Instantly stop pressing left mouse before transitioning to a new window.
 				// for focus.
@@ -2199,7 +2207,7 @@ found:
 				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr, global_focus.cursor->x(), global_focus.cursor->y() );
 			}
 
-			if ( global_focus.keyboardFocusWindow && global_focus.keyboardFocusWindow->surface.wlr != nullptr )
+			if ( win_surface(global_focus.keyboardFocusWindow) != nullptr )
 				wlserver_keyboardfocus( global_focus.keyboardFocusWindow->surface.wlr );
 			wlserver_unlock();
 		}
