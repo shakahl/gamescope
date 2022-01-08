@@ -2183,6 +2183,7 @@ found:
 	if (global_focus.inputFocusWindow)
 		global_focus.inputFocusMode = global_focus.inputFocusWindow->inputFocusMode;
 
+	// Pick keyboard focus window
 	global_focus.keyboardFocusWindow = global_focus.inputFocusWindow;
 	if ( global_focus.inputFocusMode )
 	{
@@ -2191,6 +2192,7 @@ found:
 			: global_focus.focusWindow;
 	}
 
+	// Tell wlserver about our keyboard/mouse focus.
 	if ( global_focus.inputFocusWindow    != previous_focus.inputFocusWindow ||
 		 global_focus.keyboardFocusWindow != previous_focus.keyboardFocusWindow )
 	{
@@ -2287,6 +2289,7 @@ found:
 		}
 	}
 
+	// Set SDL window title
 	if ( global_focus.focusWindow )
 		sdlwindow_title( global_focus.focusWindow->title );
 }
