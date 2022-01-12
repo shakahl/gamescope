@@ -84,6 +84,12 @@
 #define GPUVIS_TRACE_IMPLEMENTATION
 #include "gpuvis_trace_utils.h"
 
+template< typename T >
+constexpr const T& clamp( const T& x, const T& min, const T& max )
+{
+    return x < min ? min : max < x ? max : x;
+}
+
 struct ignore {
 	struct ignore	*next;
 	unsigned long	sequence;
@@ -1141,7 +1147,7 @@ using PaintWindowFlags = uint32_t;
 
 static void
 paint_window(win *w, win *scaleW, struct Composite_t *pComposite,
-			  struct VulkanPipeline_t *pPipeline, MouseCursor *cursor, PaintWindowFlags flags = 0, float flOpacityScale = 1.0f)
+			  struct VulkanPipeline_t *pPipeline, MouseCursor *cursor, PaintWindowFlags flags = 0, float flOpacityScale = 1.0f, win *fit = nullptr )
 {
 	uint32_t sourceWidth, sourceHeight;
 	int drawXOffset = 0, drawYOffset = 0;
@@ -1207,6 +1213,12 @@ paint_window(win *w, win *scaleW, struct Composite_t *pComposite,
 	{
 		sourceWidth = scaleW->a.width;
 		sourceHeight = scaleW->a.height;
+		if ( fit )
+		{
+			// If we have an override window, try to fit it in as long as it won't make our scale go below 1.0.
+			sourceWidth = std::max<uint32_t>( sourceWidth, clamp<int>( fit->a.x + fit->a.width, 0, currentOutputWidth ) );
+			sourceHeight = std::max<uint32_t>( sourceHeight, clamp<int>( fit->a.y + fit->a.height, 0, currentOutputHeight ) );
+		}
 	}
 
 	if (sourceWidth != currentOutputWidth || sourceHeight != currentOutputHeight || globalScaleRatio != 1.0f)
@@ -1438,7 +1450,7 @@ paint_all()
 				: ((currentTime - fadeOutStartTime) / (float)g_FadeOutDuration);
 	
 			paint_cached_base_layer(g_HeldCommits[HELD_COMMIT_FADE], g_CachedPlanes[HELD_COMMIT_FADE], &composite, &pipeline, 1.0f - opacityScale);
-			paint_window(w, w, &composite, &pipeline, global_focus.cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::FadeTarget | PaintWindowFlag::DrawBorders, opacityScale);
+			paint_window(w, w, &composite, &pipeline, global_focus.cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::FadeTarget | PaintWindowFlag::DrawBorders, opacityScale, override);
 		}
 		else
 		{
@@ -1452,7 +1464,7 @@ paint_all()
 				}
 			}
 			// Just draw focused window as normal, be it Steam or the game
-			paint_window(w, w, &composite, &pipeline, global_focus.cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::DrawBorders);
+			paint_window(w, w, &composite, &pipeline, global_focus.cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::DrawBorders, 1.0f, override);
 		}
 		update_touch_scaling( &composite );
 	}
@@ -1463,7 +1475,7 @@ paint_all()
 	// as we will have too many layers. Better to be safe than sorry.
 	if ( override && !w->isSteamStreamingClient )
 	{
-		paint_window(override, w, &composite, &pipeline, global_focus.cursor);
+		paint_window(override, w, &composite, &pipeline, global_focus.cursor, 0, 1.0f, override);
 		update_touch_scaling( &composite );
 	}
 
