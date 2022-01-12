@@ -2103,6 +2103,8 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	}
 
 	XFree(children);
+
+	ctx->dirty_x = true;
 }
 
 wlr_surface *win_surface(win *window)
@@ -4043,6 +4045,7 @@ void init_xwayland_ctx(gamescope_xwayland_server_t *xwayland_server)
 
 	ctx->xwayland_server = xwayland_server;
 	ctx->dpy = xwayland_server->get_xdisplay();
+	ctx->dirty_x = true;
 	if (!ctx->dpy)
 	{
 		xwm_log.errorf("Can't open display");
@@ -4351,6 +4354,16 @@ steamcompmgr_main(int argc, char **argv)
 		focusDirty = false;
 		bool vblank = false;
 
+		{
+			gamescope_xwayland_server_t *server = NULL;
+			for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
+			{
+				assert( server );
+				if ( server->ctx->dirty_x && XPending( server->ctx->dpy ) )
+					dispatch_x11( server->ctx.get() );
+			}
+		}
+
 		if ( poll( pollfds.data(), pollfds.size(), -1 ) < 0)
 		{
 			if ( errno == EAGAIN )
@@ -4374,9 +4387,9 @@ steamcompmgr_main(int argc, char **argv)
 
 		for (size_t i = EVENT_X11; i < pollfds.size(); i++)
 		{
-			if ( pollfds[ i ].revents & POLLIN )
+			gamescope_xwayland_server_t *server = wlserver_get_xwayland_server(i - EVENT_X11);
+			if ( ( pollfds[ i ].revents & POLLIN )  )
 			{
-				gamescope_xwayland_server_t *server = wlserver_get_xwayland_server(i - EVENT_X11);
 				assert(server);
 				dispatch_x11( server->ctx.get() );
 			}
@@ -4397,6 +4410,7 @@ steamcompmgr_main(int argc, char **argv)
 							 (unsigned char *)&inputCounter, 1 );
 
 			lastPublishedInputCounter = inputCounter;
+			root_ctx->dirty_x = true;
 		}
 
 		if (focusDirty == true)
