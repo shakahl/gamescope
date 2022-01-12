@@ -34,6 +34,7 @@ struct xwayland_ctx_t
 {
 	gamescope_xwayland_server_t *xwayland_server;
 	Display			*dpy;
+	bool			dirty_x;
 
 	win				*list;
 	int				scr;
