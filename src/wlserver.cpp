@@ -182,6 +182,7 @@ static void wlserver_movecursor( int x, int y )
 {
 	wlserver.mouse_surface_cursorx += x;
 
+#if 0
 	if ( wlserver.mouse_surface_cursorx > wlserver.mouse_focus_surface->current.width - 1 )
 	{
 		wlserver.mouse_surface_cursorx = wlserver.mouse_focus_surface->current.width - 1;
@@ -191,9 +192,11 @@ static void wlserver_movecursor( int x, int y )
 	{
 		wlserver.mouse_surface_cursorx = 0;
 	}
+#endif
 
 	wlserver.mouse_surface_cursory += y;
 
+#if 0
 	if ( wlserver.mouse_surface_cursory > wlserver.mouse_focus_surface->current.height - 1 )
 	{
 		wlserver.mouse_surface_cursory = wlserver.mouse_focus_surface->current.height - 1;
@@ -203,6 +206,7 @@ static void wlserver_movecursor( int x, int y )
 	{
 		wlserver.mouse_surface_cursory = 0;
 	}
+#endif
 }
 
 static void wlserver_handle_pointer_motion(struct wl_listener *listener, void *data)
