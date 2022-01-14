@@ -2301,7 +2301,7 @@ determine_and_apply_focus()
 		{
 			wlserver_lock();
 			if ( win_surface(global_focus.inputFocusWindow) != nullptr )
-				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr, global_focus.cursor->x() - global_focus.inputFocusWindow->a.x, global_focus.cursor->y() - global_focus.inputFocusWindow->a.y );
+				wlserver_mousefocus( global_focus.focusWindow->surface.wlr, global_focus.cursor->x() - global_focus.inputFocusWindow->a.x, global_focus.cursor->y() - global_focus.inputFocusWindow->a.y );
 
 			if ( win_surface(global_focus.keyboardFocusWindow) != nullptr )
 				wlserver_keyboardfocus( global_focus.keyboardFocusWindow->surface.wlr );
