@@ -400,7 +400,21 @@ private:
 
 sem waitListSem;
 std::mutex waitListLock;
-std::vector< std::pair< int, uint64_t > > waitList;
+
+struct WaitListEntry_t
+{
+	int fence;
+	// Josh: Whether or not to nudge mangoapp that we got
+	// a frame as soon as we know this commit is done.
+	// This could technically be out of date if we change windows
+	// but for a max couple frames of inaccuracy when switching windows
+	// compared to being all over the place from handling in the
+	// steamcompmgr thread in handle_done_commits, it is worth it.
+	bool mangoapp_nudge;
+	uint64_t commitID;
+};
+
+std::vector< WaitListEntry_t > waitList;
 
 bool imageWaitThreadRun = true;
 
@@ -417,8 +431,7 @@ wait:
 	}
 
 	bool bFound = false;
-	int fence;
-	uint64_t commitID;
+	WaitListEntry_t entry;
 
 retry:
 	{
@@ -429,32 +442,34 @@ retry:
 			goto wait;
 		}
 
-		fence = waitList[ 0 ].first;
-		commitID = waitList[ 0 ].second;
+		entry = waitList[ 0 ];
 		bFound = true;
 		waitList.erase( waitList.begin() );
 	}
 
 	assert( bFound == true );
 
-	gpuvis_trace_begin_ctx_printf( commitID, "wait fence" );
-	struct pollfd fd = { fence, POLLOUT, 0 };
+	gpuvis_trace_begin_ctx_printf( entry.commitID, "wait fence" );
+	struct pollfd fd = { entry.fence, POLLOUT, 0 };
 	int ret = poll( &fd, 1, 100 );
 	if ( ret < 0 )
 	{
 		xwm_log.errorf_errno( "failed to poll fence FD" );
 	}
-	gpuvis_trace_end_ctx_printf( commitID, "wait fence" );
+	gpuvis_trace_end_ctx_printf( entry.commitID, "wait fence" );
 
-	close( fence );
+	close( entry.fence );
 
 	{
 		std::unique_lock< std::mutex > lock( listCommitsDoneLock );
 
-		listCommitsDone.push_back( commitID );
+		listCommitsDone.push_back( entry.commitID );
 	}
 
 	nudge_steamcompmgr();
+
+	if ( entry.mangoapp_nudge )
+		mangoapp_update();
 
 	goto retry;
 }
@@ -3512,10 +3527,6 @@ void handle_done_commits( void )
 					// If this is the main plane, repaint
 					if ( w->id == currentFocusWindow && !w->isSteamStreamingClient )
 					{
-						// TODO: Check for a mangoapp atom in future.
-						// (Needs the win* refactor from the multiple xwayland branch)
-						if (currentExternalOverlayWindow != None)
-							mangoapp_update();
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
 						hasRepaint = true;
 					}
@@ -3527,8 +3538,6 @@ void handle_done_commits( void )
 
 					if ( w->isSteamStreamingClientVideo && currentFocusWin && currentFocusWin->isSteamStreamingClient )
 					{
-						if (currentExternalOverlayWindow != None)
-							mangoapp_update();
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
 						hasRepaint = true;
 					}
@@ -3606,10 +3615,20 @@ void check_new_wayland_res( void )
 				fence = vulkan_texture_get_fence( newCommit->vulkanTex );
 			}
 
+			// Whether or not to nudge mango app when this commit is done.
+			const bool mango_nudge = ( w == currentFocusWin && !w->isSteamStreamingClient ) ||
+									 ( currentFocusWin && currentFocusWin->isSteamStreamingClient && w->isSteamStreamingClientVideo );
+
 			gpuvis_trace_printf( "pushing wait for commit %lu win %lx", newCommit->commitID, w->id );
 			{
 				std::unique_lock< std::mutex > lock( waitListLock );
-				waitList.push_back( std::make_pair( fence, newCommit->commitID ) );
+				WaitListEntry_t entry
+				{
+					.fence = fence,
+					.mangoapp_nudge = mango_nudge,
+					.commitID = newCommit->commitID,
+				};
+				waitList.push_back( entry );
 			}
 
 			// Wake up commit wait thread if chilling
