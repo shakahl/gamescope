@@ -262,6 +262,8 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 	struct wlserver_touch *touch = wl_container_of( listener, touch, down );
 	struct wlr_event_touch_down *event = (struct wlr_event_touch_down *) data;
 
+	steamcompmgr_on_touch(++wlserver.touch_count);
+
 	if ( wlserver.mouse_focus_surface != NULL )
 	{
 		double x = g_bRotated ? event->y : event->x;
@@ -319,6 +321,8 @@ static void wlserver_handle_touch_up(struct wl_listener *listener, void *data)
 {
 	struct wlserver_touch *touch = wl_container_of( listener, touch, up );
 	struct wlr_event_touch_up *event = (struct wlr_event_touch_up *) data;
+
+	steamcompmgr_on_touch(--wlserver.touch_count);
 
 	if ( wlserver.mouse_focus_surface != NULL )
 	{
@@ -1033,4 +1037,9 @@ void wlserver_surface_finish( struct wlserver_surface *surf )
 	surf->wlr = nullptr;
 	wl_list_remove( &surf->pending_link );
 	wl_list_remove( &surf->destroy.link );
+}
+
+void wlserver_flush()
+{
+	wl_display_flush_clients(wlserver.display);
 }

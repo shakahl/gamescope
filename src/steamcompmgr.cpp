@@ -750,6 +750,31 @@ window_wants_no_focus_when_mouse_hidden( win *w )
 	return w && w->appID == 769;
 }
 
+int g_nCurrentTouchCount = 0;
+
+static bool window_no_focus_should_hide()
+{
+	return ( global_focus.cursor && global_focus.cursor->isHidden() ) &&
+			!g_nCurrentTouchCount;
+}
+
+void steamcompmgr_on_touch(int count)
+{
+	bool bOldHide = window_no_focus_should_hide();
+	g_nCurrentTouchCount = count;
+	bool bNewHide = window_no_focus_should_hide();
+	win *window = global_focus.inputFocusWindow;
+
+	if (window && window_wants_no_focus_when_mouse_hidden(window) && bOldHide != bNewHide)
+	{
+		int x = bNewHide ? -window->a.width  : 0;
+		int y = bNewHide ? -window->a.height : 0;
+		XMoveWindow(window->ctx->dpy, window->id, x, y);
+		XSync(window->ctx->dpy, 0);
+		wlserver_flush();
+	}
+}
+
 /**
  * Constructor for a cursor. It is hidden in the beginning (normally until moved by user).
  */
@@ -789,20 +814,19 @@ void MouseCursor::queryButtonMask(unsigned int &mask)
 
 void MouseCursor::checkSuspension()
 {
+	bool bOldHide = window_no_focus_should_hide();
 	unsigned int buttonMask;
 	queryButtonMask(buttonMask);
+
+	win *window = m_ctx->focus.inputFocusWindow;
 
 	if (buttonMask & ( Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask )) {
 		m_hideForMovement = false;
 		m_lastMovedTime = get_time_in_milliseconds();
 
 		// If we aren't hiding anymore, make sure we move Steam back.
-		win *window = m_ctx->focus.inputFocusWindow;
-		if (window) {	
+		if (window)
 			window->mouseMoved = 0;
-			if ( window_wants_no_focus_when_mouse_hidden(window) )
-				XMoveWindow(window->ctx->dpy, window->id, 0, 0);
-		}	
 	}
 
 	const bool suspended = get_time_in_milliseconds() - m_lastMovedTime > cursorHideTime;
@@ -812,20 +836,22 @@ void MouseCursor::checkSuspension()
 		win *window = m_ctx->focus.inputFocusWindow;
 
 		// Rearm warp count
-		if (window) {	
+		if (window)
 			window->mouseMoved = 0;
-
-			// Move Steam offscreen if the cursor goes invisible to avoid
-			// weird hover events.
-			if ( window_wants_no_focus_when_mouse_hidden(window) )
-				XMoveWindow(window->ctx->dpy, window->id, -window->a.width, -window->a.height);
-		}
 
 		// We're hiding the cursor, force redraw if we were showing it
 		if (window && !m_imageEmpty ) {
 			hasRepaint = true;
 			nudge_steamcompmgr();
 		}
+	}
+
+	bool bNewHide = window_no_focus_should_hide();
+	if ( window && window_wants_no_focus_when_mouse_hidden( window ) && bOldHide != bNewHide )
+	{
+		int x = bNewHide ? 0 : -window->a.width;
+		int y = bNewHide ? 0 : -window->a.height;
+		XMoveWindow(window->ctx->dpy, window->id, x, y);
 	}
 }
 
@@ -987,14 +1013,17 @@ void MouseCursor::move(int x, int y)
 	m_lastMovedTime = get_time_in_milliseconds();
 	if (m_hideForMovement)
 	{
+		bool bOldHide = window_no_focus_should_hide();
+		m_hideForMovement = false;
+		bool bNewHide = window_no_focus_should_hide();
+
 		win *window = m_ctx->focus.inputFocusWindow;
 		if (window) {	
 			window->mouseMoved = 0;
-			if ( window_wants_no_focus_when_mouse_hidden(window) )
+			if ( window_wants_no_focus_when_mouse_hidden(window) && bOldHide != bNewHide )
 				XMoveWindow(window->ctx->dpy, window->id, 0, 0);
 		}
 	}
-	m_hideForMovement = false;
 }
 
 void MouseCursor::updatePosition()
@@ -2123,7 +2152,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	// otherwise move it back onscreen.
 	if ( window_wants_no_focus_when_mouse_hidden( inputFocus ) )
 	{
-		if ( ctx->cursor->isHidden() )
+		if ( window_no_focus_should_hide() )
 		{
 			if ( w->a.x != -inputFocus->a.width || w->a.y != -inputFocus->a.height )
 				XMoveWindow( ctx->dpy, inputFocus->id, -inputFocus->a.width, -inputFocus->a.height );

@@ -88,6 +88,7 @@ struct wlserver_t {
 	
 	bool button_held[ WLSERVER_BUTTON_COUNT ];
 	bool touch_down[ WLSERVER_TOUCH_COUNT ];
+	int touch_count;
 
 	struct wl_listener session_active;
 	struct wl_listener new_input_method;
@@ -166,3 +167,5 @@ struct wlserver_surface
 
 void wlserver_surface_init( struct wlserver_surface *surf, long x11_id );
 void wlserver_surface_finish( struct wlserver_surface *surf );
+
+void wlserver_flush();

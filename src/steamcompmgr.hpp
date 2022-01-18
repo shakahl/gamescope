@@ -93,5 +93,7 @@ extern uint32_t inputCounter;
 void nudge_steamcompmgr( void );
 void take_screenshot( void );
 
+void steamcompmgr_on_touch(int count);
+
 extern void mangoapp_update();
 gamescope_xwayland_server_t *steamcompmgr_get_focused_server();
