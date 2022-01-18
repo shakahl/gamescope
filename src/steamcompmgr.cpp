@@ -29,6 +29,7 @@
  *   says above. Not that I can really do anything about it
  */
 
+#include <X11/Xlib.h>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -742,6 +743,13 @@ get_window_last_done_commit( win *w, std::shared_ptr<commit_t> &commit )
 		commit = w->commit_queue[ lastCommit ];
 }
 
+// For Steam, etc.
+static bool
+window_wants_no_focus_when_mouse_hidden( win *w )
+{
+	return w && w->appID == 769;
+}
+
 /**
  * Constructor for a cursor. It is hidden in the beginning (normally until moved by user).
  */
@@ -787,6 +795,14 @@ void MouseCursor::checkSuspension()
 	if (buttonMask & ( Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask )) {
 		m_hideForMovement = false;
 		m_lastMovedTime = get_time_in_milliseconds();
+
+		// If we aren't hiding anymore, make sure we move Steam back.
+		win *window = m_ctx->focus.inputFocusWindow;
+		if (window) {	
+			window->mouseMoved = 0;
+			if ( window_wants_no_focus_when_mouse_hidden(window) )
+				XMoveWindow(window->ctx->dpy, window->id, 0, 0);
+		}	
 	}
 
 	const bool suspended = get_time_in_milliseconds() - m_lastMovedTime > cursorHideTime;
@@ -796,8 +812,13 @@ void MouseCursor::checkSuspension()
 		win *window = m_ctx->focus.inputFocusWindow;
 
 		// Rearm warp count
-		if (window) {
+		if (window) {	
 			window->mouseMoved = 0;
+
+			// Move Steam offscreen if the cursor goes invisible to avoid
+			// weird hover events.
+			if ( window_wants_no_focus_when_mouse_hidden(window) )
+				XMoveWindow(window->ctx->dpy, window->id, -window->a.width, -window->a.height);
 		}
 
 		// We're hiding the cursor, force redraw if we were showing it
@@ -964,6 +985,15 @@ void MouseCursor::move(int x, int y)
 		return;
 
 	m_lastMovedTime = get_time_in_milliseconds();
+	if (m_hideForMovement)
+	{
+		win *window = m_ctx->focus.inputFocusWindow;
+		if (window) {	
+			window->mouseMoved = 0;
+			if ( window_wants_no_focus_when_mouse_hidden(window) )
+				XMoveWindow(window->ctx->dpy, window->id, 0, 0);
+		}
+	}
 	m_hideForMovement = false;
 }
 
@@ -2084,7 +2114,25 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	}
 
 	if (w->a.x != 0 || w->a.y != 0)
+	{
 		XMoveWindow(ctx->dpy, ctx->focus.focusWindow->id, 0, 0);
+	}
+
+	// If we are focusing Steam,
+	// move Steam ""offscreen""" if the cursor is invisible to avoid hover events
+	// otherwise move it back onscreen.
+	if ( window_wants_no_focus_when_mouse_hidden( inputFocus ) )
+	{
+		if ( ctx->cursor->isHidden() )
+		{
+			if ( w->a.x != -inputFocus->a.width || w->a.y != -inputFocus->a.height )
+				XMoveWindow( ctx->dpy, inputFocus->id, -inputFocus->a.width, -inputFocus->a.height );
+		}
+		else if ( w->a.x != 0 || w->a.y != 0 )
+		{
+			XMoveWindow( ctx->dpy, inputFocus->id, 0, 0 );
+		}
+	}
 
 	if ( ctx->focus.focusWindow->isFullscreen && ( w->a.width != ctx->root_width || w->a.height != ctx->root_height || globalScaleRatio != 1.0f ) )
 	{

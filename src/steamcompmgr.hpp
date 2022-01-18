@@ -50,6 +50,7 @@ public:
 	bool setCursorImage(char *data, int w, int h, int hx, int hy);
 
 	void hide() { m_lastMovedTime = 0; checkSuspension(); }
+	bool isHidden() { return m_hideForMovement; }
 
 private:
 	void warp(int x, int y);
