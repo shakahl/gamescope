@@ -1543,7 +1543,7 @@ paint_all(Display *dpy, MouseCursor *cursor)
 		
 		int nOldLayerCount = composite.nLayerCount;
 
-		uint32_t flags = PaintWindowFlag::DrawBorders;
+		uint32_t flags = 0;
 		if ( !bHasVideoUnderlay )
 			flags |= PaintWindowFlag::BasePlane;
 		paint_window(dpy, w, w, &composite, &pipeline, cursor, flags);
