@@ -146,6 +146,7 @@ struct win {
 	bool isFullscreen;
 	bool isSysTrayIcon;
 	bool sizeHintsSpecified;
+	bool fullscreenSizeHintsOnly;
 	bool skipTaskbar;
 	bool skipPager;
 	unsigned int requestedWidth;
@@ -2415,7 +2416,6 @@ get_size_hints(xwayland_ctx_t *ctx, win *w)
 		// SDL creates a fullscreen overrride-redirect window and reparents the game
 		// window under it, centered. We get rid of the modeswitch and also want that
 		// black border gone.
-		if (w->a.override_redirect)
 		{
 			Window	    root_return = None, parent_return = None;
 			Window	    *children = NULL;
@@ -2431,7 +2431,8 @@ get_size_hints(xwayland_ctx_t *ctx, win *w)
 
 				// If we have a unique children that isn't override-reidrect that is
 				// contained inside this fullscreen window, it's probably it.
-				if (attribs.override_redirect == false &&
+				if (w->a.override_redirect &&
+					attribs.override_redirect == false &&
 					attribs.width <= w->a.width &&
 					attribs.height <= w->a.height)
 				{
@@ -2443,6 +2444,31 @@ get_size_hints(xwayland_ctx_t *ctx, win *w)
 					XMoveWindow(ctx->dpy, children[0], 0, 0);
 
 					w->ignoreOverrideRedirect = true;
+				}
+				
+				// Workaround for Naruto Shippuden Ultimate Ninja Storm 4
+				// This game creates a child window that is 1080p 
+				// on a window that is our display size, 800p.
+				// causing it to clip :(
+				// Detect this and resize it's child window.
+				if (w->isFullscreen &&
+					attribs.override_redirect == false &&
+					attribs.width > w->a.width &&
+					attribs.height > w->a.height &&
+					w->a.width == g_nNestedWidth &&
+					w->a.height == g_nNestedHeight)
+				{
+					int nMaxNested = std::max(g_nNestedWidth, g_nNestedHeight);
+					int nMaxChild = std::max(attribs.width, attribs.height);
+
+					int nWidth = attribs.width * nMaxNested / nMaxChild;
+					int nHeight = attribs.height * nMaxNested / nMaxChild;
+
+					w->sizeHintsSpecified = true;
+					w->fullscreenSizeHintsOnly = true;
+					w->requestedWidth = nWidth;
+					w->requestedHeight = nHeight;
+					XResizeWindow(ctx->dpy, children[0], nWidth, nHeight);
 				}
 			}
 
@@ -3104,6 +3130,11 @@ handle_net_wm_state(xwayland_ctx_t *ctx, win *w, XClientMessageEvent *ev)
 	for (size_t i = 0; i < 2; i++) {
 		if (props[i] == ctx->atoms.netWMStateFullscreenAtom) {
 			update_net_wm_state(action, &w->isFullscreen);
+			if ( !w->isFullscreen && w->fullscreenSizeHintsOnly )
+			{
+				w->fullscreenSizeHintsOnly = false;
+				w->sizeHintsSpecified = false;
+			}
 			focusDirty = true;
 		} else if (props[i] == ctx->atoms.netWMStateSkipTaskbarAtom) {
 			update_net_wm_state(action, &w->skipTaskbar);
