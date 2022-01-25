@@ -106,3 +106,5 @@ void take_screenshot( void );
 
 extern void mangoapp_update();
 gamescope_xwayland_server_t *steamcompmgr_get_focused_server();
+
+extern uint64_t g_SteamCompMgrVBlankTime;
