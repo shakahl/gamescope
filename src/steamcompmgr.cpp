@@ -41,6 +41,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <queue>
 
 #include <assert.h>
 #include <stdlib.h>
@@ -216,6 +217,47 @@ bool			synchronize;
 std::mutex g_SteamCompMgrXWaylandServerMutex;
 
 uint64_t g_SteamCompMgrVBlankTime = 0;
+
+std::mutex g_FrameLimitCommitsMutex;
+std::queue< std::shared_ptr<commit_t> > g_FrameLimitCommits;
+
+static int g_nSteamCompMgrTargetFPS = 0;
+
+bool steamcompmgr_window_should_limit_fps( win *w )
+{
+	return g_nSteamCompMgrTargetFPS != 0 && !w->isSteam && w->appID != 769 && !w->isOverlay && !w->isExternalOverlay;
+}
+
+void steamcompmgr_fpslimit_add_commit( std::shared_ptr<commit_t> commit )
+{
+	std::unique_lock<std::mutex> lock(g_FrameLimitCommitsMutex);
+	g_FrameLimitCommits.push( commit );
+	fpslimit_mark_frame();
+}
+
+void steamcompmgr_fpslimit_release_commit()
+{
+	std::unique_lock<std::mutex> lock(g_FrameLimitCommitsMutex);
+	if ( !g_FrameLimitCommits.empty() )
+		g_FrameLimitCommits.pop();
+}
+
+
+void steamcompmgr_fpslimit_release_all()
+{
+	std::unique_lock<std::mutex> lock(g_FrameLimitCommitsMutex);
+	g_FrameLimitCommits = std::queue< std::shared_ptr<commit_t> >();
+}
+
+void steamcompmgr_set_target_fps( int nTarget )
+{
+	if ( g_nSteamCompMgrTargetFPS != nTarget )
+	{
+		g_nSteamCompMgrTargetFPS = nTarget;
+		fpslimit_set_target( nTarget );
+		steamcompmgr_fpslimit_release_all();
+	}
+}
 
 enum HeldCommitTypes_t
 {
@@ -2311,6 +2353,9 @@ determine_and_apply_focus()
 		hasRepaint = true;
 	}
 
+	if ( previous_focus.focusWindow != global_focus.focusWindow )
+		steamcompmgr_fpslimit_release_all();
+
 	// Backchannel to Steam
 	unsigned long focusedWindow = 0;
 	unsigned long focusedAppId = 0;
@@ -3414,6 +3459,10 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 	{
 		g_uVBlankRateOfDecayPercentage = (uint64_t)get_prop( ctx, ctx->root, ctx->atoms.gamescopeTuneableRateOfDecay, g_uDefaultVBlankRateOfDecayPercentage );
 	}
+	if ( ev->atom == ctx->atoms.gamescopeFPSLimit )
+	{
+		steamcompmgr_set_target_fps( get_prop( ctx, ctx->root, ctx->atoms.gamescopeFPSLimit, 0 ) );
+	}
 }
 
 static int
@@ -3628,6 +3677,10 @@ void handle_done_commits( xwayland_ctx_t *ctx )
 					if ( w == global_focus.focusWindow && !w->isSteamStreamingClient )
 					{
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
+						if ( steamcompmgr_window_should_limit_fps( w ) )
+						{
+							steamcompmgr_fpslimit_add_commit( w->commit_queue[ j ] );
+						}
 						hasRepaint = true;
 					}
 
@@ -3639,6 +3692,10 @@ void handle_done_commits( xwayland_ctx_t *ctx )
 					if ( w->isSteamStreamingClientVideo && global_focus.focusWindow && global_focus.focusWindow->isSteamStreamingClient )
 					{
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
+						if ( steamcompmgr_window_should_limit_fps( w ) )
+						{
+							steamcompmgr_fpslimit_add_commit( w->commit_queue[ j ] );
+						}
 						hasRepaint = true;
 					}
 
@@ -4256,6 +4313,8 @@ void init_xwayland_ctx(gamescope_xwayland_server_t *xwayland_server)
 	ctx->atoms.gamescopeTuneableVBlankRedZone = XInternAtom( ctx->dpy, "GAMESCOPE_TUNEABLE_VBLANK_REDZONE", false );
 	ctx->atoms.gamescopeTuneableRateOfDecay = XInternAtom( ctx->dpy, "GAMESCOPE_TUNEABLE_VBLANK_RATE_OF_DECAY_PERCENTAGE", false );
 
+	ctx->atoms.gamescopeFPSLimit = XInternAtom( ctx->dpy, "GAMESCOPE_FPS_LIMIT", false );
+
 	ctx->root_width = DisplayWidth(ctx->dpy, ctx->scr);
 	ctx->root_height = DisplayHeight(ctx->dpy, ctx->scr);
 
@@ -4382,6 +4441,8 @@ steamcompmgr_main(int argc, char **argv)
 
 	int vblankFD = vblank_init();
 	assert( vblankFD >= 0 );
+
+	fpslimit_init();
 
 	std::unique_lock<std::mutex> xwayland_server_guard(g_SteamCompMgrXWaylandServerMutex);
 
@@ -4595,7 +4656,11 @@ steamcompmgr_main(int argc, char **argv)
 				{
 					for (win *w = server->ctx->list; w; w = w->next)
 					{
-						if ( w->surface.wlr != nullptr )
+						bool bSendCallback = w->surface.wlr != nullptr;
+						if ( w == global_focus.focusWindow && !fpslimit_use_frame_callbacks_for_focus_window() )
+							bSendCallback = false;
+
+						if ( bSendCallback )
 						{
 							// Acknowledge commit once.
 							wlserver_lock();
@@ -4640,6 +4705,19 @@ steamcompmgr_main(int argc, char **argv)
 	}
 
 	finish_drm( &g_DRM );
+}
+
+void steamcompmgr_send_frame_done_to_focus_window()
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	if ( global_focus.focusWindow && global_focus.focusWindow->surface.wlr )
+	{
+		wlserver_lock();
+		wlserver_send_frame_done( global_focus.focusWindow->surface.wlr , &now );
+		wlserver_unlock();		
+	}
 }
 
 gamescope_xwayland_server_t *steamcompmgr_get_focused_server()
