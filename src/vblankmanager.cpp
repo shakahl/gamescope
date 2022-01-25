@@ -1,13 +1,16 @@
 // Try to figure out when vblank is and notify steamcompmgr to render some time before it
 
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <chrono>
 #include <atomic>
+#include <condition_variable>
 
 #include <assert.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <vulkan/vulkan_core.h>
 
 #include "gpuvis_trace_utils.h"
 
@@ -145,4 +148,161 @@ int vblank_init( void )
 void vblank_mark_possible_vblank( uint64_t nanos )
 {
 	g_lastVblank = nanos;
+}
+
+// fps limit manager
+
+static std::mutex g_TargetFPSMutex;
+static std::condition_variable g_TargetFPSCondition;
+static int g_nFpsLimitTargetFPS = 0;
+
+std::mutex g_FrameInfoMutex;
+struct FrameInfo_t
+{
+	uint64_t lastFrame;
+	uint64_t currentFrame;
+	uint64_t frameCount;
+};
+
+FrameInfo_t g_FrameInfo;
+
+void steamcompmgr_fpslimit_release_commit();
+void steamcompmgr_send_frame_done_to_focus_window();
+
+//#define FPS_LIMIT_DEBUG
+
+void fpslimitThreadRun( void )
+{
+	pthread_setname_np( pthread_self(), "gamescope-fps" );
+
+	uint64_t deviation = 0;
+	uint64_t lastFrameCount = 0;
+	uint64_t lastCommitReleased = get_time_in_nanos();
+	while ( true )
+	{
+		int nTargetFPS;
+		{
+			std::unique_lock<std::mutex> lock(g_TargetFPSMutex);
+			g_TargetFPSCondition.wait(lock, []{ return g_nFpsLimitTargetFPS != 0; });
+			nTargetFPS = g_nFpsLimitTargetFPS;
+		}
+
+		FrameInfo_t frameInfo;
+		{
+			std::unique_lock<std::mutex> lock( g_FrameInfoMutex );
+			frameInfo = g_FrameInfo;
+		}
+
+		if ( frameInfo.frameCount == lastFrameCount )
+			continue;
+
+		// Check if we are unaligned or not, as to whether
+		// we call frame callbacks from this thread instead of steamcompmgr based
+		// on vblank count.
+		bool useFrameCallbacks = fpslimit_use_frame_callbacks_for_focus_window( nTargetFPS, 0 );
+
+		uint64_t targetInterval = 1'000'000'000ul / nTargetFPS;
+
+		uint64_t t0 = lastCommitReleased;
+		uint64_t t1 = get_time_in_nanos();
+	
+		// Not the actual frame time of the game
+		// this is the time of the amount of work a 'frame' has done.
+		uint64_t frameTime = t1 - t0;
+		lastFrameCount = frameInfo.frameCount;
+
+#ifdef FPS_LIMIT_DEBUG
+		fprintf( stderr, "frame time = %.2fms - target %.2fms - deviation %.2fms \n", frameTime / 1'000'000.0, targetInterval / 1'000'000.0, deviation / 1'000'000.0 );
+#endif
+
+		if ( frameTime * 100 > targetInterval * 103 - deviation * 100 )
+		{
+			// If we have a slow frame, reset the deviation since we
+			// do not want to compensate for low performance later on
+			deviation = 0;
+			steamcompmgr_fpslimit_release_commit();
+			lastCommitReleased = get_time_in_nanos();
+
+			// If we aren't vblank aligned, send our frame callbacks here.
+			if ( !useFrameCallbacks )
+				steamcompmgr_send_frame_done_to_focus_window();
+		}
+		else
+		{
+			uint64_t now = get_time_in_nanos();
+
+			uint64_t targetPoint = now + targetInterval - deviation - frameTime;
+
+			while ( targetPoint < now )
+				targetPoint += targetInterval;
+
+			//fprintf( stderr, "Sleeping from %lu to %lu to reach %d fps\n", now, targetPoint, g_nFpsLimitTargetFPS );
+			sleep_until_nanos( targetPoint );
+			t1 = get_time_in_nanos();
+
+			frameTime = t1 - t0;
+			deviation += frameTime - targetInterval;
+			deviation = std::min( deviation, targetInterval / 16 );
+
+			steamcompmgr_fpslimit_release_commit();
+			lastCommitReleased = get_time_in_nanos();
+
+			// If we aren't vblank aligned, send our frame callbacks here.
+			if ( !useFrameCallbacks )
+				steamcompmgr_send_frame_done_to_focus_window();
+		}
+
+		// If we aren't vblank aligned, nudge ourselves to process done commits now.
+		if ( !useFrameCallbacks )
+		{
+			steamcompmgr_send_frame_done_to_focus_window();
+			nudge_steamcompmgr();
+		}
+	}
+}
+
+void fpslimit_init( void )
+{
+	g_FrameInfo.lastFrame = get_time_in_nanos();
+	g_FrameInfo.currentFrame = get_time_in_nanos();
+
+	std::thread fpslimitThread( fpslimitThreadRun );
+	fpslimitThread.detach();
+}
+
+void fpslimit_mark_frame( void )
+{
+	std::unique_lock<std::mutex> lock( g_FrameInfoMutex );
+	g_FrameInfo.lastFrame = g_FrameInfo.currentFrame;
+	g_FrameInfo.currentFrame = get_time_in_nanos();
+	g_FrameInfo.frameCount++;
+}
+
+bool fpslimit_use_frame_callbacks_for_focus_window( int nTargetFPS, int nVBlankCount ) 
+{
+	if ( !nTargetFPS )
+		return true;
+
+	if ( g_nOutputRefresh % nTargetFPS == 0 )
+	{
+		// Aligned, limit based on vblank count.
+		return nVBlankCount % ( g_nOutputRefresh / nTargetFPS );
+	}
+	else
+	{
+		// Unaligned from VBlank, never use frame callbacks on SteamCompMgr thread.
+		// call them from fpslimit
+		return false;
+	}
+}
+
+// Called from steamcompmgr thread
+void fpslimit_set_target( int nTargetFPS )
+{
+	{
+		std::unique_lock<std::mutex> lock(g_TargetFPSMutex);
+		g_nFpsLimitTargetFPS = nTargetFPS;
+	}
+
+	g_TargetFPSCondition.notify_all();
 }
