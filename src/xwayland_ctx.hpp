@@ -115,5 +115,7 @@ struct xwayland_ctx_t
 
 		Atom gamescopeScalingFilter;
 		Atom gamescopeFSRSharpness;
+
+		Atom gamescopeFPSLimit;
 	} atoms;
 };
