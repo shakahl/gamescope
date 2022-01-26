@@ -99,6 +99,12 @@ extern float focusedWindowScaleY;
 extern float focusedWindowOffsetX;
 extern float focusedWindowOffsetY;
 
+extern float zoomScaleRatio;
+extern float newZoomScaleRatio;
+
+extern float winXOffset;
+extern float winYOffset;
+
 extern uint32_t inputCounter;
 
 void nudge_steamcompmgr( void );

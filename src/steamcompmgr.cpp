@@ -185,7 +185,10 @@ unsigned int 	gamesRunningCount;
 
 float			overscanScaleRatio = 1.0;
 float			zoomScaleRatio = 1.0;
-float			globalScaleRatio = 1.0f;
+float			newZoomScaleRatio = 0.0;
+
+float 			winXOffset = 0.0;
+float 			winYOffset = 0.0;
 
 float			focusedWindowScaleX = 1.0f;
 float			focusedWindowScaleY = 1.0f;
@@ -1123,6 +1126,8 @@ void MouseCursor::paint(win *window, struct Composite_t *pComposite,
 	currentScaleRatio = std::min(g_flMaxWindowScale, currentScaleRatio);
 	if (g_bIntegerScale)
 		currentScaleRatio = floor(currentScaleRatio);
+	
+	float globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 
 	cursorOffsetX = (currentOutputWidth - window->a.width * currentScaleRatio * globalScaleRatio) / 2.0f;
 	cursorOffsetY = (currentOutputHeight - window->a.height * currentScaleRatio * globalScaleRatio) / 2.0f;
@@ -1273,6 +1278,8 @@ paint_window(win *w, win *scaleW, struct Composite_t *pComposite,
 		sourceWidth = scaleW->a.width;
 		sourceHeight = scaleW->a.height;
 	}
+	
+	float globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 
 	if (sourceWidth != currentOutputWidth || sourceHeight != currentOutputHeight || globalScaleRatio != 1.0f)
 	{
@@ -1296,8 +1303,8 @@ paint_window(win *w, win *scaleW, struct Composite_t *pComposite,
 
 		if ( zoomScaleRatio != 1.0 )
 		{
-			drawXOffset += (((int)sourceWidth / 2) - cursor->x()) * currentScaleRatio;
-			drawYOffset += (((int)sourceHeight / 2) - cursor->y()) * currentScaleRatio;
+			drawXOffset += winXOffset;
+			drawYOffset += winYOffset;
 		}
 	}
 
@@ -2134,6 +2141,8 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 
 	if (w->a.x != 0 || w->a.y != 0)
 		XMoveWindow(ctx->dpy, ctx->focus.focusWindow->id, 0, 0);
+
+	float globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 
 	if ( ctx->focus.focusWindow->isFullscreen && ( w->a.width != ctx->root_width || w->a.height != ctx->root_height || globalScaleRatio != 1.0f ) )
 	{
@@ -3350,27 +3359,19 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 	{
 		overscanScaleRatio = get_prop(ctx, ctx->root, ctx->atoms.screenScaleAtom, 0xFFFFFFFF) / (double)0xFFFFFFFF;
 
-		globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
-
 		if (global_focus.focusWindow)
 		{
 			hasRepaint = true;
 		}
-
-		focusDirty = true;
 	}
 	if (ev->atom == ctx->atoms.screenZoomAtom)
 	{
 		zoomScaleRatio = get_prop(ctx, ctx->root, ctx->atoms.screenZoomAtom, 0xFFFF) / (double)0xFFFF;
 
-		globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
-
 		if (global_focus.focusWindow)
 		{
 			hasRepaint = true;
 		}
-
-		focusDirty = true;
 	}
 	if (ev->atom == ctx->atoms.WMTransientForAtom)
 	{
@@ -4380,8 +4381,6 @@ steamcompmgr_main(int argc, char **argv)
 	overscanScaleRatio = get_prop(root_ctx, root_ctx->root, root_ctx->atoms.screenScaleAtom, 0xFFFFFFFF) / (double)0xFFFFFFFF;
 	zoomScaleRatio = get_prop(root_ctx, root_ctx->root, root_ctx->atoms.screenZoomAtom, 0xFFFF) / (double)0xFFFF;
 
-	globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
-
 	determine_and_apply_focus();
 
 	if ( readyPipeFD != -1 )
@@ -4538,6 +4537,13 @@ steamcompmgr_main(int argc, char **argv)
 			gamescope_xwayland_server_t *server = NULL;
 			for (size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++)
 				check_new_wayland_res(server->ctx.get());
+		}
+		
+		if ( newZoomScaleRatio != 0.0 )
+		{
+			zoomScaleRatio = newZoomScaleRatio;
+			newZoomScaleRatio = 0.0;
+			hasRepaint = true;
 		}
 
 		if ( ( g_bTakeScreenshot == true || hasRepaint == true || is_fading_out() ) && vblank == true )

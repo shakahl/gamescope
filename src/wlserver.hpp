@@ -88,7 +88,15 @@ struct wlserver_t {
 	
 	bool button_held[ WLSERVER_BUTTON_COUNT ];
 	bool touch_down[ WLSERVER_TOUCH_COUNT ];
-
+	int touch_count;
+	struct {
+		double x, y;
+	} touch_points[ WLSERVER_TOUCH_COUNT ], initial_drag_pos, initial_drag_offset;
+	bool touch_passthrough_down[ WLSERVER_TOUCH_COUNT ];
+	bool initiate_drag;
+	double initial_drag_dist;
+	double initial_drag_zoom;
+	
 	struct wl_listener session_active;
 	struct wl_listener new_input_method;
 };

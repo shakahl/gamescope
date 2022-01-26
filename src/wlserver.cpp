@@ -267,6 +267,11 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 		double x = g_bRotated ? event->y : event->x;
 		double y = g_bRotated ? 1.0 - event->x : event->y;
 
+		wlserver.touch_down[ event->touch_id ] = true;
+		wlserver.touch_points[ event->touch_id ].x = x;
+		wlserver.touch_points[ event->touch_id ].y = y;
+		wlserver.touch_count++;
+		
 		x *= g_nOutputWidth;
 		y *= g_nOutputHeight;
 
@@ -282,22 +287,24 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
 		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
 
-		wlserver.mouse_surface_cursorx = x;
-		wlserver.mouse_surface_cursory = y;
-
 		if ( g_nTouchClickMode == WLSERVER_TOUCH_CLICK_PASSTHROUGH )
 		{
 			if ( event->touch_id >= 0 && event->touch_id < WLSERVER_TOUCH_COUNT )
 			{
-				wlr_seat_touch_notify_down( wlserver.wlr.seat, wlserver.mouse_focus_surface, event->time_msec, event->touch_id,
-											wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
+				wlr_seat_touch_notify_down( wlserver.wlr.seat, wlserver.mouse_focus_surface,
+											event->time_msec, event->touch_id, x, y );
 
-				wlserver.touch_down[ event->touch_id ] = true;
+				wlserver.touch_passthrough_down[ event->touch_id ] = true;
 			}
 		}
-		else
+		else if ( wlserver.touch_count == 1 )
 		{
-			wlr_seat_pointer_notify_motion( wlserver.wlr.seat, event->time_msec, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
+			wlserver.mouse_surface_cursorx = x;
+			wlserver.mouse_surface_cursory = y;
+			
+			wlr_seat_pointer_notify_motion( wlserver.wlr.seat, event->time_msec, 
+											wlserver.mouse_surface_cursorx,
+											wlserver.mouse_surface_cursory );
 			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 
 			uint32_t button = steamcompmgr_button_to_wlserver_button( g_nTouchClickMode );
@@ -310,6 +317,9 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 				wlserver.button_held[ g_nTouchClickMode ] = true;
 			}
 		}
+		
+		if ( wlserver.touch_count == 2 )
+			wlserver.initiate_drag = true;
 	}
 
 	bump_input_counter();
@@ -320,34 +330,47 @@ static void wlserver_handle_touch_up(struct wl_listener *listener, void *data)
 	struct wlserver_touch *touch = wl_container_of( listener, touch, up );
 	struct wlr_event_touch_up *event = (struct wlr_event_touch_up *) data;
 
+	if ( wlserver.touch_count == 2 )
+		wlserver.initiate_drag = false;
+	
 	if ( wlserver.mouse_focus_surface != NULL )
 	{
-		bool bReleasedAny = false;
-		for ( int i = 0; i < WLSERVER_BUTTON_COUNT; i++ )
+		if ( wlserver.touch_count == 1 )
 		{
-			if ( wlserver.button_held[ i ] == true )
+			bool bReleasedAny = false;
+			for ( int i = 0; i < WLSERVER_BUTTON_COUNT; i++ )
 			{
-				uint32_t button = steamcompmgr_button_to_wlserver_button( i );
-
-				if ( button != 0 )
+				if ( wlserver.button_held[ i ] == true )
 				{
-					wlr_seat_pointer_notify_button( wlserver.wlr.seat, event->time_msec, button, WLR_BUTTON_RELEASED );
-					bReleasedAny = true;
+					uint32_t button = steamcompmgr_button_to_wlserver_button( i );
+
+					if ( button != 0 )
+					{
+						wlr_seat_pointer_notify_button( wlserver.wlr.seat, event->time_msec, button, WLR_BUTTON_RELEASED );
+						bReleasedAny = true;
+					}
+
+					wlserver.button_held[ i ] = false;
 				}
-
-				wlserver.button_held[ i ] = false;
 			}
-		}
 
-		if ( bReleasedAny == true )
-		{
-			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+			if ( bReleasedAny == true )
+			{
+				wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+			}
 		}
 
 		if ( event->touch_id >= 0 && event->touch_id < WLSERVER_TOUCH_COUNT && wlserver.touch_down[ event->touch_id ] == true )
 		{
-			wlr_seat_touch_notify_up( wlserver.wlr.seat, event->time_msec, event->touch_id );
+			
+			if ( wlserver.touch_passthrough_down[ event->touch_id ] == true )
+			{
+				wlr_seat_touch_notify_up( wlserver.wlr.seat, event->time_msec, event->touch_id );
+				wlserver.touch_passthrough_down[ event->touch_id ] = false;
+			}
+			
 			wlserver.touch_down[ event->touch_id ] = false;
+			wlserver.touch_count--;
 		}
 	}
 
@@ -364,6 +387,9 @@ static void wlserver_handle_touch_motion(struct wl_listener *listener, void *dat
 		double x = g_bRotated ? event->y : event->x;
 		double y = g_bRotated ? 1.0 - event->x : event->y;
 
+		wlserver.touch_points[ event->touch_id ].x = x;
+		wlserver.touch_points[ event->touch_id ].y = y;
+		
 		x *= g_nOutputWidth;
 		y *= g_nOutputHeight;
 
@@ -378,18 +404,42 @@ static void wlserver_handle_touch_motion(struct wl_listener *listener, void *dat
 
 		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
 		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
-
-		wlserver.mouse_surface_cursorx = x;
-		wlserver.mouse_surface_cursory = y;
-
+		
 		if ( g_nTouchClickMode == WLSERVER_TOUCH_CLICK_PASSTHROUGH )
 		{
-			wlr_seat_touch_notify_motion( wlserver.wlr.seat, event->time_msec, event->touch_id, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
+			wlr_seat_touch_notify_motion( wlserver.wlr.seat, event->time_msec, event->touch_id, x, y );
 		}
-		else
+		else if ( wlserver.touch_count == 1 )
 		{
+			wlserver.mouse_surface_cursorx = x;
+			wlserver.mouse_surface_cursory = y;
+			
 			wlr_seat_pointer_notify_motion( wlserver.wlr.seat, event->time_msec, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
 			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+		}
+		
+		if ( wlserver.touch_count == 2 )
+		{
+			double diffx = wlserver.touch_points[ 1 ].x - wlserver.touch_points[ 0 ].x;
+			double diffy = wlserver.touch_points[ 1 ].y - wlserver.touch_points[ 0 ].y;
+			double distance = sqrt( diffx * diffx + diffy * diffy );
+			
+			if ( wlserver.initiate_drag )
+			{
+				wlserver.initial_drag_dist = distance;
+				wlserver.initial_drag_zoom = zoomScaleRatio;
+				wlserver.initial_drag_pos.x = wlserver.touch_points[ 0 ].x;
+				wlserver.initial_drag_pos.y = wlserver.touch_points[ 0 ].y;
+				wlserver.initial_drag_offset.x = winXOffset;
+				wlserver.initial_drag_offset.y = winYOffset;
+				wlserver.initiate_drag = false;
+			}
+			
+			double newZoom = wlserver.initial_drag_zoom * ( distance / wlserver.initial_drag_dist );
+			newZoomScaleRatio = newZoom > 1.0 ? newZoom : 1.0;
+			
+			winXOffset = wlserver.initial_drag_offset.x + ( wlserver.touch_points[ 0 ].x - wlserver.initial_drag_pos.x ) * g_nOutputWidth;
+			winYOffset = wlserver.initial_drag_offset.y + ( wlserver.touch_points[ 0 ].y - wlserver.initial_drag_pos.y ) * g_nOutputHeight;
 		}
 	}
 
