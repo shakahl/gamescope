@@ -2233,18 +2233,18 @@ found:
 	currentFocusWindow = focus->id;
 	currentFocusWin = focus;
 
-	if ( currentInputFocusWindow != inputFocus->id ||
-		currentInputFocusMode != inputFocus->inputFocusMode )
-	{
-		win *keyboardFocusWin = inputFocus;
+	win *keyboardFocusWin = inputFocus;
+	if ( inputFocus->inputFocusMode )
+		keyboardFocusWin = override_focus ? override_focus : focus;
 
+	if ( currentInputFocusWindow != inputFocus->id ||
+		currentInputFocusMode != inputFocus->inputFocusMode ||
+		currentKeyboardFocusWindow != keyboardFocusWin->id )
+	{
 		if ( debugFocus == true )
 		{
 			xwm_log.debugf( "determine_and_apply_focus inputFocus %lu", inputFocus->id );
 		}
-
-		if ( inputFocus->inputFocusMode )
-			keyboardFocusWin = override_focus ? override_focus : focus;
 
 		if ( inputFocus->surface.wlr != nullptr || keyboardFocusWin->surface.wlr != nullptr )
 		{
