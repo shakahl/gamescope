@@ -1598,9 +1598,14 @@ paint_all()
 		}
 	}
 
+	bool bDrewCursor = false;
+
 	// Draw cursor if we need to
 	if (input) {
+		int nLayerCountBefore = composite.nLayerCount;
 		global_focus.cursor->paint(override == input ? w : input, &composite, &pipeline);
+		int nLayerCountAfter = composite.nLayerCount;
+		bDrewCursor = nLayerCountAfter > nLayerCountBefore;
 	}
 
 	if ( !bValidContents || ( BIsNested() == false && g_DRM.paused == true ) )
@@ -1631,7 +1636,7 @@ paint_all()
 	const bool bOverrideCompositeHack = false;
 #endif
 
-	if ( BIsNested() == false && alwaysComposite == false && bCapture == false && bOverrideCompositeHack == false && bWasFirstFrame == false )
+	if ( BIsNested() == false && bDrewCursor == false && alwaysComposite == false && bCapture == false && bOverrideCompositeHack == false && bWasFirstFrame == false )
 	{
 		int ret = drm_prepare( &g_DRM, &composite, &pipeline );
 		if ( ret == 0 )
