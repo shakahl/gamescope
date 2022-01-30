@@ -611,6 +611,14 @@ static win * find_win( xwayland_ctx_t *ctx, struct wlr_surface *surf )
 	return nullptr;
 }
 
+wlr_surface *win_surface(win *window)
+{
+	if (!window)
+		return nullptr;
+
+	return window->surface.wlr;
+}
+
 #ifdef COMMIT_REF_DEBUG
 static int buffer_refs = 0;
 #endif
@@ -841,6 +849,11 @@ void MouseCursor::checkSuspension()
 
 void MouseCursor::warp(int x, int y)
 {
+	if (!m_ctx->focus.inputFocusWindow)
+		return;
+
+	x -= m_ctx->focus.inputFocusWindow->a.x;
+	y -= m_ctx->focus.inputFocusWindow->a.y;
 	XWarpPointer(m_ctx->dpy, None, x11_win(m_ctx->focus.inputFocusWindow), 0, 0, 0, 0, x, y);
 }
 
@@ -933,6 +946,9 @@ void MouseCursor::constrainPosition()
 {
 	int i;
 	win *window = m_ctx->focus.inputFocusWindow;
+	win *override = m_ctx->focus.overrideWindow;
+	if (window == override)
+		window = m_ctx->focus.focusWindow;
 
 	// If we had barriers before, get rid of them.
 	for (i = 0; i < 4; i++) {
@@ -947,23 +963,32 @@ void MouseCursor::constrainPosition()
 										  x1, y1, x2, y2, 0, 0, NULL);
 	};
 
-	// Constrain it to the window; careful, the corners will leak due to a known X server bug.
-	m_scaledFocusBarriers[0] = barricade(0, window->a.y, m_ctx->root_width, window->a.y);
+	int x1 = window->a.x;
+	int y1 = window->a.y;
+	if (override)
+	{
+		x1 = std::min(x1, override->a.x);
+		y1 = std::min(y1, override->a.y);
+	}
+	int x2 = window->a.x + window->a.width;
+	int y2 = window->a.y + window->a.height;
+	if (override)
+	{
+		x2 = std::max(x2, override->a.x + override->a.width);
+		y2 = std::max(y2, override->a.y + override->a.height);
+	}
 
-	m_scaledFocusBarriers[1] = barricade(window->a.x + window->a.width, 0,
-										 window->a.x + window->a.width, m_ctx->root_height);
-	m_scaledFocusBarriers[2] = barricade(m_ctx->root_width, window->a.y + window->a.height,
-										 0, window->a.y + window->a.height);
-	m_scaledFocusBarriers[3] = barricade(window->a.x, m_ctx->root_height, window->a.x, 0);
+	// Constrain it to the window; careful, the corners will leak due to a known X server bug.
+	m_scaledFocusBarriers[0] = barricade(0, y1, m_ctx->root_width, y1);
+	m_scaledFocusBarriers[1] = barricade(x2, 0, x2, m_ctx->root_height);
+	m_scaledFocusBarriers[2] = barricade(m_ctx->root_width, y2, 0, y2);
+	m_scaledFocusBarriers[3] = barricade(x1, m_ctx->root_height, x1, 0);
 
 	// Make sure the cursor is somewhere in our jail
 	int rootX, rootY;
 	queryGlobalPosition(rootX, rootY);
 
-	if (rootX - window->a.x >= window->a.width || rootY - window->a.y >= window->a.height ||
-		rootX - window->a.x < 0 || rootY - window->a.y < 0 ) {
-		// If this is Steam and doesn't want focus and we got OOB,
-		// then put is in the bottom right.
+	if ( rootX >= x2 || rootY >= y2 || rootX < x1 || rootY < y1 ) {
 		if ( window_wants_no_focus_when_mouse_hidden( window ) && m_hideForMovement )
 			warp(window->a.width, window->a.height);
 		else
@@ -974,14 +999,73 @@ void MouseCursor::constrainPosition()
 	}
 }
 
-void MouseCursor::move(int x, int y)
+bool MouseCursor::isAboveLocalOverride() const
+{
+	return shouldLocalFocusSwitch() &&
+		   m_x >= m_ctx->focus.overrideWindow->a.x &&
+		   m_y >= m_ctx->focus.overrideWindow->a.y &&
+		   m_x < m_ctx->focus.overrideWindow->a.x + m_ctx->focus.overrideWindow->a.width &&
+		   m_y < m_ctx->focus.overrideWindow->a.y + m_ctx->focus.overrideWindow->a.height;
+}
+
+bool MouseCursor::shouldGlobalFocusSwitch() const
+{
+	return m_ctx->focus.overrideWindow &&
+		   ( global_focus.inputFocusWindow == m_ctx->focus.focusWindow || 
+			 global_focus.inputFocusWindow == m_ctx->focus.overrideWindow );
+}
+
+bool MouseCursor::shouldLocalFocusSwitch() const
+{
+	return m_ctx->focus.overrideWindow &&
+		   ( m_ctx->focus.inputFocusWindow == m_ctx->focus.focusWindow || 
+			 m_ctx->focus.inputFocusWindow == m_ctx->focus.overrideWindow );
+}
+
+void MouseCursor::updateOverrideFocus( bool bOver, bool bLock )
+{
+	if ( shouldLocalFocusSwitch() )
+	{
+		m_ctx->focus.inputFocusWindow = bOver
+			? m_ctx->focus.overrideWindow
+			: m_ctx->focus.focusWindow;
+
+		XRaiseWindow( m_ctx->dpy, m_ctx->focus.inputFocusWindow->id );
+	}
+
+	if ( shouldGlobalFocusSwitch() )
+	{
+		global_focus.inputFocusWindow = m_ctx->focus.inputFocusWindow;
+
+		if ( win_surface( global_focus.inputFocusWindow ) != nullptr )
+		{
+			if ( bLock )
+				wlserver_lock();
+			wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr,
+				m_x - global_focus.inputFocusWindow->a.x,
+				m_y - global_focus.inputFocusWindow->a.y );
+			if ( bLock )
+				wlserver_unlock();
+		}
+	}
+}
+
+void MouseCursor::move( int x, int y, bool bLock )
 {
 	// Some stuff likes to warp in-place
 	if (m_x == x && m_y == y) {
 		return;
 	}
+
+	bool wasOverOverride = isAboveLocalOverride();
+
 	m_x = x;
 	m_y = y;
+
+	bool isOverOverride = isAboveLocalOverride();
+
+	if ( wasOverOverride != isOverOverride )
+		updateOverrideFocus( isOverOverride, bLock );
 
 	win *window = m_ctx->focus.inputFocusWindow;
 
@@ -1506,7 +1590,7 @@ paint_all()
 	if ( override && w && !w->isSteamStreamingClient )
 	{
 		paint_window(override, w, &composite, &pipeline, global_focus.cursor);
-		update_touch_scaling( &composite );
+		//update_touch_scaling( &composite );
 	}
 
 	// If we have any layers that aren't a cursor or overlay, then we have valid contents for presentation.
@@ -2047,9 +2131,23 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 
 	pick_primary_focus_and_override( &ctx->focus, ctx->focusControlWindow, vecPossibleFocusWindows, false, vecFocuscontrolAppIDs );
 
-	if ( inputFocus == NULL )
+	if (!inputFocus)
 	{
-		inputFocus = ctx->focus.overrideWindow ? ctx->focus.overrideWindow : ctx->focus.focusWindow;
+		int x = ctx->cursor->x();
+		int y = ctx->cursor->y();
+
+		if (ctx->focus.overrideWindow &&
+			x >= ctx->focus.overrideWindow->a.x &&
+			y >= ctx->focus.overrideWindow->a.y &&
+			x < ctx->focus.overrideWindow->a.x + ctx->focus.overrideWindow->a.width &&
+			y < ctx->focus.overrideWindow->a.y + ctx->focus.overrideWindow->a.height)
+		{
+			inputFocus = ctx->focus.overrideWindow;
+		}
+		else
+		{
+			inputFocus = ctx->focus.focusWindow;
+		}
 	}
 
 	if ( !ctx->focus.focusWindow )
@@ -2078,8 +2176,10 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	}
 
 	win *keyboardFocusWin = inputFocus;
+	if (!keyboardFocusWin)
+		keyboardFocusWin = ctx->focus.overrideWindow ? ctx->focus.overrideWindow : ctx->focus.focusWindow;
 
-	if ( inputFocus && inputFocus->inputFocusMode )
+	if ( keyboardFocusWin && keyboardFocusWin->inputFocusMode )
 		keyboardFocusWin = ctx->focus.overrideWindow ? ctx->focus.overrideWindow : ctx->focus.focusWindow;
 
 	Window keyboardFocusWindow = keyboardFocusWin ? keyboardFocusWin->id : None;
@@ -2096,8 +2196,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 			xwm_log.debugf( "determine_and_apply_focus inputFocus %lu", inputFocus->id );
 		}
 
-		if ( !ctx->focus.overrideWindow || ctx->focus.overrideWindow != keyboardFocusWin )
-			XSetInputFocus(ctx->dpy, keyboardFocusWin->id, RevertToNone, CurrentTime);
+		XSetInputFocus(ctx->dpy, keyboardFocusWin->id, RevertToNone, CurrentTime);
 
 		// If the window doesn't want focus when hidden, move it away
 		// as we are going to hide it straight after.
@@ -2112,9 +2211,6 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 		ctx->focus.inputFocusWindow = inputFocus;
 		ctx->focus.inputFocusMode = inputFocus->inputFocusMode;
 		ctx->currentKeyboardFocusWindow = keyboardFocusWin->id;
-
-		// cursor is likely not interactable anymore in its original context, hide
-		ctx->cursor->hide();
 	}
 
 	w = ctx->focus.focusWindow;
@@ -2170,14 +2266,6 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	}
 
 	XFree(children);
-}
-
-wlr_surface *win_surface(win *window)
-{
-	if (!window)
-		return nullptr;
-
-	return window->surface.wlr;
 }
 
 static void
@@ -2248,11 +2336,34 @@ determine_and_apply_focus()
 
 	// Pick inputFocusWindow
 	if (global_focus.overlayWindow && global_focus.overlayWindow->inputFocusMode)
+	{
 		global_focus.inputFocusWindow = global_focus.overlayWindow;
-	else if (global_focus.overrideWindow)
-		global_focus.inputFocusWindow = global_focus.overrideWindow;
+		global_focus.keyboardFocusWindow = global_focus.overlayWindow;
+	}
 	else
-		global_focus.inputFocusWindow = global_focus.focusWindow;
+	{
+		int x = 0, y = 0;
+		if (global_focus.overrideWindow)
+		{
+			x = global_focus.overrideWindow->ctx->cursor->x();
+			y = global_focus.overrideWindow->ctx->cursor->y();
+		}
+
+		if (global_focus.overrideWindow &&
+			x >= global_focus.overrideWindow->a.x &&
+			y >= global_focus.overrideWindow->a.y &&
+			x < global_focus.overrideWindow->a.x + global_focus.overrideWindow->a.width &&
+			y < global_focus.overrideWindow->a.y + global_focus.overrideWindow->a.height)
+		{
+			global_focus.inputFocusWindow = global_focus.overrideWindow;
+		}
+		else
+		{
+			global_focus.inputFocusWindow = global_focus.focusWindow;
+		}
+
+		global_focus.keyboardFocusWindow = global_focus.overrideWindow ? global_focus.overrideWindow : global_focus.focusWindow;
+	}
 
 	// Pick cursor from our input focus window
 
@@ -2264,7 +2375,6 @@ determine_and_apply_focus()
 		global_focus.inputFocusMode = global_focus.inputFocusWindow->inputFocusMode;
 
 	// Pick keyboard focus window
-	global_focus.keyboardFocusWindow = global_focus.inputFocusWindow;
 	if ( global_focus.inputFocusMode )
 	{
 		global_focus.keyboardFocusWindow = global_focus.overrideWindow
@@ -2281,13 +2391,9 @@ determine_and_apply_focus()
 		{
 			wlserver_lock();
 			if ( win_surface(global_focus.inputFocusWindow) != nullptr )
-			{
-				// Instantly stop pressing left mouse before transitioning to a new window.
-				// for focus.
-				// Fixes dropdowns not working.
-				wlserver_mousebutton( BTN_LEFT, false, 0 );
-				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr, global_focus.cursor->x(), global_focus.cursor->y() );
-			}
+				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr,
+					global_focus.cursor->x() - global_focus.inputFocusWindow->a.x,
+					global_focus.cursor->y() - global_focus.inputFocusWindow->a.y );
 
 			if ( win_surface(global_focus.keyboardFocusWindow) != nullptr )
 				wlserver_keyboardfocus( global_focus.keyboardFocusWindow->surface.wlr );
@@ -3968,7 +4074,8 @@ dispatch_x11( xwayland_ctx_t *ctx )
 				handle_client_message(ctx, &ev.xclient);
 				break;
 			case LeaveNotify:
-				if (ev.xcrossing.window == x11_win(ctx->focus.inputFocusWindow))
+				if (ev.xcrossing.window == x11_win(ctx->focus.inputFocusWindow) &&
+					!ctx->focus.overrideWindow)
 				{
 					// Josh: need to defer this as we could have a destroy later on
 					// and end up submitting commands with the currentInputFocusWIndow
@@ -3980,7 +4087,7 @@ dispatch_x11( xwayland_ctx_t *ctx )
 					win * w = find_win(ctx, ev.xmotion.window);
 					if (w && w == ctx->focus.inputFocusWindow)
 					{
-						cursor->move(ev.xmotion.x, ev.xmotion.y);
+						cursor->move(ev.xmotion.x_root, ev.xmotion.y_root);
 					}
 					break;
 				}
@@ -4424,7 +4531,6 @@ steamcompmgr_main(int argc, char **argv)
 
 	for (;;)
 	{
-		focusDirty = false;
 		bool vblank = false;
 
 		{
@@ -4492,6 +4598,7 @@ steamcompmgr_main(int argc, char **argv)
 			hasFocusWindow = global_focus.focusWindow != nullptr;
 
 			sdlwindow_pushupdate();
+			focusDirty = false;
 		}
 
 		// If our DRM state is out-of-date, refresh it. This might update

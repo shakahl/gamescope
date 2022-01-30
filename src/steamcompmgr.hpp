@@ -37,7 +37,7 @@ public:
 	int x() const;
 	int y() const;
 
-	void move(int x, int y);
+	void move(int x, int y, bool bLock = true);
 	void updatePosition();
 	void constrainPosition();
 	void resetPosition();
@@ -53,12 +53,18 @@ public:
 
 	bool isHidden() { return m_hideForMovement; }
 
+	bool isAboveLocalOverride() const;
+	bool shouldGlobalFocusSwitch() const;
+	bool shouldLocalFocusSwitch() const;
+
 	void forcePosition(int x, int y)
 	{
 		warp(x, y);
 		m_x = x;
 		m_y = y;
 	}
+
+	void updateOverrideFocus( bool bOver, bool bLock );
 
 private:
 	void warp(int x, int y);
