@@ -1579,7 +1579,9 @@ paint_all()
 	if ( override && w && !w->isSteamStreamingClient )
 	{
 		paint_window(override, w, &composite, &pipeline, global_focus.cursor);
-		update_touch_scaling( &composite );
+		// Don't update touch scaling for composite. We don't ever make it our
+		// wlserver_mousefocus window.
+		//update_touch_scaling( &composite );
 	}
 
 	// If we have any layers that aren't a cursor or overlay, then we have valid contents for presentation.
@@ -2133,7 +2135,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 
 	if ( inputFocus == NULL )
 	{
-		inputFocus = ctx->focus.overrideWindow ? ctx->focus.overrideWindow : ctx->focus.focusWindow;
+		inputFocus = ctx->focus.focusWindow;
 	}
 
 	if ( !ctx->focus.focusWindow )
@@ -2164,7 +2166,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 	win *keyboardFocusWin = inputFocus;
 
 	if ( inputFocus && inputFocus->inputFocusMode )
-		keyboardFocusWin = ctx->focus.overrideWindow ? ctx->focus.overrideWindow : ctx->focus.focusWindow;
+		keyboardFocusWin = ctx->focus.focusWindow;
 
 	Window keyboardFocusWindow = keyboardFocusWin ? keyboardFocusWin->id : None;
 
@@ -2205,9 +2207,19 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 
 	ctx->cursor->constrainPosition();
 
-	if ( ctx->list[0].id != inputFocus->id )
+	if ( inputFocus == ctx->focus.focusWindow && ctx->focus.overrideWindow )
 	{
-		XRaiseWindow(ctx->dpy, inputFocus->id);
+		if ( ctx->list[0].id != ctx->focus.overrideWindow->id )
+		{
+			XRaiseWindow(ctx->dpy, ctx->focus.overrideWindow->id);
+		}
+	}
+	else
+	{
+		if ( ctx->list[0].id != inputFocus->id )
+		{
+			XRaiseWindow(ctx->dpy, inputFocus->id);
+		}
 	}
 
 	if (!ctx->focus.focusWindow->nudged)
@@ -2332,11 +2344,15 @@ determine_and_apply_focus()
 
 	// Pick inputFocusWindow
 	if (global_focus.overlayWindow && global_focus.overlayWindow->inputFocusMode)
+	{
 		global_focus.inputFocusWindow = global_focus.overlayWindow;
-	else if (global_focus.overrideWindow)
-		global_focus.inputFocusWindow = global_focus.overrideWindow;
+		global_focus.keyboardFocusWindow = global_focus.overlayWindow;
+	}
 	else
+	{
 		global_focus.inputFocusWindow = global_focus.focusWindow;
+		global_focus.keyboardFocusWindow = global_focus.overrideWindow ? global_focus.overrideWindow : global_focus.focusWindow;
+	}
 
 	// Pick cursor from our input focus window
 
@@ -2347,8 +2363,6 @@ determine_and_apply_focus()
 	if (global_focus.inputFocusWindow)
 		global_focus.inputFocusMode = global_focus.inputFocusWindow->inputFocusMode;
 
-	// Pick keyboard focus window
-	global_focus.keyboardFocusWindow = global_focus.inputFocusWindow;
 	if ( global_focus.inputFocusMode )
 	{
 		global_focus.keyboardFocusWindow = global_focus.overrideWindow
@@ -2365,13 +2379,7 @@ determine_and_apply_focus()
 		{
 			wlserver_lock();
 			if ( win_surface(global_focus.inputFocusWindow) != nullptr )
-			{
-				// Instantly stop pressing left mouse before transitioning to a new window.
-				// for focus.
-				// Fixes dropdowns not working.
-				wlserver_mousebutton( BTN_LEFT, false, 0 );
 				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr, global_focus.cursor->x(), global_focus.cursor->y() );
-			}
 
 			if ( win_surface(global_focus.keyboardFocusWindow) != nullptr )
 				wlserver_keyboardfocus( global_focus.keyboardFocusWindow->surface.wlr );
