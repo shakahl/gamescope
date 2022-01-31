@@ -37,7 +37,7 @@ public:
 	int x() const;
 	int y() const;
 
-	void move(int x, int y, bool bLock = true);
+	void move(int x, int y);
 	void updatePosition();
 	void constrainPosition();
 	void resetPosition();
@@ -64,7 +64,7 @@ public:
 		m_y = y;
 	}
 
-	void updateOverrideFocus( bool bOver, bool bLock );
+	void updateOverrideFocus( bool bOver );
 
 private:
 	void warp(int x, int y);

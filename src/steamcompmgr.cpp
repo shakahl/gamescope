@@ -1022,7 +1022,7 @@ bool MouseCursor::shouldLocalFocusSwitch() const
 			 m_ctx->focus.inputFocusWindow == m_ctx->focus.overrideWindow );
 }
 
-void MouseCursor::updateOverrideFocus( bool bOver, bool bLock )
+void MouseCursor::updateOverrideFocus( bool bOver )
 {
 	if ( shouldLocalFocusSwitch() )
 	{
@@ -1039,18 +1039,16 @@ void MouseCursor::updateOverrideFocus( bool bOver, bool bLock )
 
 		if ( win_surface( global_focus.inputFocusWindow ) != nullptr )
 		{
-			if ( bLock )
-				wlserver_lock();
+			wlserver_lock();
 			wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr,
-				m_x - global_focus.inputFocusWindow->a.x,
-				m_y - global_focus.inputFocusWindow->a.y );
-			if ( bLock )
-				wlserver_unlock();
+				m_x, m_y,
+				global_focus.inputFocusWindow->a.x, global_focus.inputFocusWindow->a.y );
+			wlserver_unlock();
 		}
 	}
 }
 
-void MouseCursor::move( int x, int y, bool bLock )
+void MouseCursor::move( int x, int y )
 {
 	// Some stuff likes to warp in-place
 	if (m_x == x && m_y == y) {
@@ -1065,7 +1063,7 @@ void MouseCursor::move( int x, int y, bool bLock )
 	bool isOverOverride = isAboveLocalOverride();
 
 	if ( wasOverOverride != isOverOverride )
-		updateOverrideFocus( isOverOverride, bLock );
+		updateOverrideFocus( isOverOverride );
 
 	win *window = m_ctx->focus.inputFocusWindow;
 
@@ -2196,7 +2194,8 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 			xwm_log.debugf( "determine_and_apply_focus inputFocus %lu", inputFocus->id );
 		}
 
-		XSetInputFocus(ctx->dpy, keyboardFocusWin->id, RevertToNone, CurrentTime);
+		if ( !ctx->focus.overrideWindow || ctx->focus.overrideWindow != keyboardFocusWin )
+			XSetInputFocus(ctx->dpy, keyboardFocusWin->id, RevertToNone, CurrentTime);
 
 		// If the window doesn't want focus when hidden, move it away
 		// as we are going to hide it straight after.
@@ -2392,8 +2391,8 @@ determine_and_apply_focus()
 			wlserver_lock();
 			if ( win_surface(global_focus.inputFocusWindow) != nullptr )
 				wlserver_mousefocus( global_focus.inputFocusWindow->surface.wlr,
-					global_focus.cursor->x() - global_focus.inputFocusWindow->a.x,
-					global_focus.cursor->y() - global_focus.inputFocusWindow->a.y );
+					global_focus.cursor->x(), global_focus.cursor->y(),
+					global_focus.inputFocusWindow->a.x, global_focus.inputFocusWindow->a.y );
 
 			if ( win_surface(global_focus.keyboardFocusWindow) != nullptr )
 				wlserver_keyboardfocus( global_focus.keyboardFocusWindow->surface.wlr );

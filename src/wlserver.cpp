@@ -280,11 +280,15 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 		x *= focusedWindowScaleX;
 		y *= focusedWindowScaleY;
 
+		x -= wlserver.surfX;
+		y -= wlserver.surfY;
+#if 0 
 		if ( x < 0.0f ) x = 0.0f;
 		if ( y < 0.0f ) y = 0.0f;
 
 		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
 		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
+#endif		
 
 		wlserver.mouse_surface_cursorx = x;
 		wlserver.mouse_surface_cursory = y;
@@ -377,11 +381,16 @@ static void wlserver_handle_touch_motion(struct wl_listener *listener, void *dat
 		x *= focusedWindowScaleX;
 		y *= focusedWindowScaleY;
 
+		x -= wlserver.surfX;
+		y -= wlserver.surfY;
+
+#if 0
 		if ( x < 0.0f ) x = 0.0f;
 		if ( y < 0.0f ) y = 0.0f;
 
 		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
 		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
+#endif
 
 		wlserver.mouse_surface_cursorx = x;
 		wlserver.mouse_surface_cursory = y;
@@ -884,9 +893,14 @@ void wlserver_key( uint32_t key, bool press, uint32_t time )
 	bump_input_counter();
 }
 
-void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */ )
+void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */, int surfX /* = 0 */, int surfY /* = 0 */ )
 {
 	wlserver.mouse_focus_surface = wlrsurface;
+	wlserver.surfX = surfX;
+	wlserver.surfY = surfY;
+
+	x -= surfX;
+	y -= surfY;
 
 	if ( x < wlrsurface->current.width && y < wlrsurface->current.height )
 	{
