@@ -158,3 +158,4 @@ bool drm_set_color_gains(struct drm_t *drm, float *gains);
 bool drm_update_gamma_lut(struct drm_t *drm);
 
 char *find_drm_node_by_devid(dev_t devid);
+int drm_get_default_refresh(struct drm_t *drm);
