@@ -276,12 +276,6 @@ static void wlserver_handle_touch_down(struct wl_listener *listener, void *data)
 		x *= focusedWindowScaleX;
 		y *= focusedWindowScaleY;
 
-		if ( x < 0.0f ) x = 0.0f;
-		if ( y < 0.0f ) y = 0.0f;
-
-		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
-		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
-
 		wlserver.mouse_surface_cursorx = x;
 		wlserver.mouse_surface_cursory = y;
 
@@ -372,12 +366,6 @@ static void wlserver_handle_touch_motion(struct wl_listener *listener, void *dat
 
 		x *= focusedWindowScaleX;
 		y *= focusedWindowScaleY;
-
-		if ( x < 0.0f ) x = 0.0f;
-		if ( y < 0.0f ) y = 0.0f;
-
-		if ( x > wlserver.mouse_focus_surface->current.width ) x = wlserver.mouse_focus_surface->current.width;
-		if ( y > wlserver.mouse_focus_surface->current.height ) y = wlserver.mouse_focus_surface->current.height;
 
 		wlserver.mouse_surface_cursorx = x;
 		wlserver.mouse_surface_cursory = y;
