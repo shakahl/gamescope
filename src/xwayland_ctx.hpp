@@ -117,5 +117,6 @@ struct xwayland_ctx_t
 		Atom gamescopeFSRSharpness;
 
 		Atom gamescopeFPSLimit;
+		Atom gamescopeDynamicRefresh;
 	} atoms;
 };
