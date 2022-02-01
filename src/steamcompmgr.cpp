@@ -3357,6 +3357,14 @@ handle_client_message(xwayland_ctx_t *ctx, XClientMessageEvent *ev)
 	}
 }
 
+
+template<typename T, typename J>
+T bit_cast(const J& src) {
+	T dst;
+	memcpy(&dst, &src, sizeof(T));
+	return dst;
+}
+
 static void
 handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 {
@@ -3618,6 +3626,18 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 	if ( ev->atom == ctx->atoms.gamescopeDynamicRefresh )
 	{
 		g_bDynamicRefreshEnabled = !!get_prop( ctx, ctx->root, ctx->atoms.gamescopeDynamicRefresh, 0 );
+	}
+	if ( ev->atom == ctx->atoms.gamescopeColorLinearGainRed )
+	{
+		drm_set_color_gains( &g_DRM, 0, bit_cast<float>( get_prop( ctx, ctx->root, ctx->atoms.gamescopeColorLinearGainRed, 0x3f800000u ) ) );
+	}
+	if ( ev->atom == ctx->atoms.gamescopeColorLinearGainGreen )
+	{
+		drm_set_color_gains( &g_DRM, 1, bit_cast<float>( get_prop( ctx, ctx->root, ctx->atoms.gamescopeColorLinearGainGreen, 0x3f800000u ) ) );
+	}
+	if ( ev->atom == ctx->atoms.gamescopeColorLinearGainBlue )
+	{
+		drm_set_color_gains( &g_DRM, 2, bit_cast<float>( get_prop( ctx, ctx->root, ctx->atoms.gamescopeColorLinearGainBlue, 0x3f800000u ) ) );
 	}
 }
 
@@ -4473,6 +4493,10 @@ void init_xwayland_ctx(gamescope_xwayland_server_t *xwayland_server)
 
 	ctx->atoms.gamescopeFPSLimit = XInternAtom( ctx->dpy, "GAMESCOPE_FPS_LIMIT", false );
 	ctx->atoms.gamescopeDynamicRefresh = XInternAtom( ctx->dpy, "GAMESCOPE_DYNAMIC_REFRESH", false );
+
+	ctx->atoms.gamescopeColorLinearGainRed   = XInternAtom( ctx->dpy, "GAMESCOPE_COLOR_LINEARGAIN_R", false );
+	ctx->atoms.gamescopeColorLinearGainGreen = XInternAtom( ctx->dpy, "GAMESCOPE_COLOR_LINEARGAIN_G", false );
+	ctx->atoms.gamescopeColorLinearGainBlue  = XInternAtom( ctx->dpy, "GAMESCOPE_COLOR_LINEARGAIN_B", false );
 
 	ctx->root_width = DisplayWidth(ctx->dpy, ctx->scr);
 	ctx->root_height = DisplayHeight(ctx->dpy, ctx->scr);
