@@ -155,8 +155,6 @@ void vblank_mark_possible_vblank( uint64_t nanos )
 static std::mutex g_TargetFPSMutex;
 static std::condition_variable g_TargetFPSCondition;
 static int g_nFpsLimitTargetFPS = 0;
-
-std::mutex g_FrameInfoMutex;
 struct FrameInfo_t
 {
 	uint64_t lastFrame;
@@ -180,21 +178,14 @@ void fpslimitThreadRun( void )
 	uint64_t lastCommitReleased = get_time_in_nanos();
 	while ( true )
 	{
+		FrameInfo_t frameInfo;
 		int nTargetFPS;
 		{
-			std::unique_lock<std::mutex> lock(g_TargetFPSMutex);
-			g_TargetFPSCondition.wait(lock, []{ return g_nFpsLimitTargetFPS != 0; });
+			std::unique_lock<std::mutex> lock( g_TargetFPSMutex );
+			g_TargetFPSCondition.wait(lock, [lastFrameCount]{ return g_nFpsLimitTargetFPS != 0 && g_FrameInfo.frameCount != lastFrameCount; });
 			nTargetFPS = g_nFpsLimitTargetFPS;
-		}
-
-		FrameInfo_t frameInfo;
-		{
-			std::unique_lock<std::mutex> lock( g_FrameInfoMutex );
 			frameInfo = g_FrameInfo;
 		}
-
-		if ( frameInfo.frameCount == lastFrameCount )
-			continue;
 
 		// Check if we are unaligned or not, as to whether
 		// we call frame callbacks from this thread instead of steamcompmgr based
@@ -272,10 +263,13 @@ void fpslimit_init( void )
 
 void fpslimit_mark_frame( void )
 {
-	std::unique_lock<std::mutex> lock( g_FrameInfoMutex );
-	g_FrameInfo.lastFrame = g_FrameInfo.currentFrame;
-	g_FrameInfo.currentFrame = get_time_in_nanos();
-	g_FrameInfo.frameCount++;
+	std::unique_lock<std::mutex> lock( g_TargetFPSMutex );
+	{
+		g_FrameInfo.lastFrame = g_FrameInfo.currentFrame;
+		g_FrameInfo.currentFrame = get_time_in_nanos();
+		g_FrameInfo.frameCount++;
+	}
+	g_TargetFPSCondition.notify_all();
 }
 
 bool fpslimit_use_frame_callbacks_for_focus_window( int nTargetFPS, int nVBlankCount ) 
