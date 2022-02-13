@@ -173,6 +173,8 @@ void steamcompmgr_send_frame_done_to_focus_window();
 
 // 1.80ms for the app's deadzone to account for varying GPU clocks, other variances, etc
 uint64_t g_uFPSLimiterRedZoneNS = 1'800'000;
+// 1.2ms for the app to app to jump into defensive mode.
+uint64_t g_uFPSLimiterRedZoneDefenseBoundsNS = 1'200'000;
 
 bool g_bFPSLimitThreadRun = true;
 
@@ -269,7 +271,7 @@ void fpslimitThreadRun( void )
 				// We can tune this later by tweaking alpha + range anyway...
 				const uint64_t alpha = 993;
 				// If we go over half of our deadzone, be more defensive about things.
-				if ( int64_t(frameTime) - int64_t(g_uFPSLimiterRedZoneNS / 2) > int64_t(rollingMaxFrameTime) )
+				if ( int64_t(frameTime) - int64_t(g_uFPSLimiterRedZoneDefenseBoundsNS) > int64_t(rollingMaxFrameTime) )
 					rollingMaxFrameTime = frameTime;
 				else
 					rollingMaxFrameTime = ( ( alpha * rollingMaxFrameTime ) + ( range - alpha ) * frameTime ) / range;
