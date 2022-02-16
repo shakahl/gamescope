@@ -154,6 +154,8 @@ struct win {
 	unsigned int requestedHeight;
 	bool is_dialog;
 
+	bool no_fps_limit;
+
 	Window transientFor;
 
 	bool nudged;
@@ -241,21 +243,30 @@ std::atomic<int> g_nMaxAppBufferCount = { 0 };
 
 bool steamcompmgr_window_should_limit_fps( win *w )
 {
-	return g_nSteamCompMgrTargetFPS != 0 && w && !w->isSteam && w->appID != 769 && !w->isOverlay && !w->isExternalOverlay;
+	return g_nSteamCompMgrTargetFPS != 0 && w && !w->isSteam && w->appID != 769 && !w->isOverlay && !w->isExternalOverlay && !w->no_fps_limit;
 }
 
-void steamcompmgr_fpslimit_add_commit( std::shared_ptr<commit_t> commit )
+void steamcompmgr_fpslimit_add_commit( win *w, std::shared_ptr<commit_t> commit )
 {
 	std::unique_lock<std::mutex> lock(g_FrameLimitCommitsMutex);
 	g_FrameLimitCommits.push( commit );
 	g_nMaxAppBufferCount = std::max<int>( g_nMaxAppBufferCount.load(), g_FrameLimitCommits.size() );
+
+	if ( g_nMaxAppBufferCount >= 64 )
+	{
+		// Chrome is weird and has an unlimited supply of buffers.
+		// so if we get into this state, just flag the window as no fps limit.
+		w->no_fps_limit = true;
+		g_FrameLimitCommits = std::queue< std::shared_ptr<commit_t> >();
+		g_nMaxAppBufferCount = 0;
+	}
 }
 
 bool steamcompmgr_fpslimit_release_commit( int consecutive_missed_frame_count )
 {
 	std::unique_lock<std::mutex> lock(g_FrameLimitCommitsMutex);
 
-	//fprintf( stderr, "a - consecutive_missed_frame_count %d, g_nAppBufferCount: %d, g_nMaxAppBufferCount: %d\n", consecutive_missed_frame_count, int(g_FrameLimitCommits.size()), g_nMaxAppBufferCount );
+	//fprintf( stderr, "a - consecutive_missed_frame_count %d, g_nAppBufferCount: %d, g_nMaxAppBufferCount: %d\n", consecutive_missed_frame_count, int(g_FrameLimitCommits.size()), g_nMaxAppBufferCount.load() );
 
 	// If we have missed as many frames as we have buffers
 	// the app may have stalled due to swapchain recreation or something
@@ -3091,6 +3102,7 @@ add_win(xwayland_ctx_t *ctx, Window id, Window prev, unsigned long sequence)
 	new_win->isSteamStreamingClientVideo = false;
 	new_win->inputFocusMode = 0;
 	new_win->is_dialog = false;
+	new_win->no_fps_limit = false;
 
 	if ( steamMode == true )
 	{
@@ -4099,7 +4111,7 @@ void handle_done_commits( xwayland_ctx_t *ctx )
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
 						if ( steamcompmgr_window_should_limit_fps( w ) )
 						{
-							steamcompmgr_fpslimit_add_commit( w->commit_queue[ j ] );
+							steamcompmgr_fpslimit_add_commit( w, w->commit_queue[ j ] );
 						}
 						hasRepaint = true;
 					}
