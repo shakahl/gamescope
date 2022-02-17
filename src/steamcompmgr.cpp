@@ -270,7 +270,7 @@ bool steamcompmgr_fpslimit_release_commit( int consecutive_missed_frame_count )
 
 	// Only allow 1 latent buffer -- essentially go to only "double
 	// buffering" when we are falling behind.
-	if ( g_nAppBufferCount >= g_nMaxAppBufferCount - 1 )
+	if ( g_nAppBufferCount >= g_nMaxAppBufferCount - 3 )
 	{
 		if ( !g_FrameLimitCommits.empty() )
 		{
