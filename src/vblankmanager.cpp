@@ -189,12 +189,14 @@ extern bool g_bLowLatency;
 
 uint64_t g_uFPSLimitLastFullFrameTime = 0;
 uint64_t g_uFPSLimitDoneToDoneTime = 0;
+uint64_t g_uPendingFrameCount = 0;
 
 void fpslimitThreadRun( void )
 {
 	pthread_setname_np( pthread_self(), "gamescope-fps" );
 
-	uint64_t lastCommitReleased = get_time_in_nanos();
+	uint64_t frameIdx = 0;
+	uint64_t lastCommitReleased[2] = { get_time_in_nanos(), get_time_in_nanos() };
 	const uint64_t range = g_uVBlankRateOfDecayMax;
 	uint64_t rollingMaxFrameTime = g_uStartingDrawTime;
 	uint64_t vblank = 0;
@@ -217,26 +219,30 @@ void fpslimitThreadRun( void )
 				return;
 
 			nTargetFPS = g_nFpsLimitTargetFPS;
-			if ( nTargetFPS == 0 )
+			if ( !g_uPendingFrameCount )
 			{
-				g_TargetFPSCondition.wait(lock);
-			}
-			else
-			{
-				targetInterval = 1'000'000'000ul / nTargetFPS;
-				auto wait_time = std::chrono::nanoseconds(int64_t(lastCommitReleased + targetInterval) - get_time_in_nanos());
-				if ( wait_time > std::chrono::nanoseconds(0) )
+				if ( nTargetFPS == 0 )
 				{
-					no_frame = g_TargetFPSCondition.wait_for(lock, std::chrono::nanoseconds(wait_time)) == std::cv_status::timeout;
+					g_TargetFPSCondition.wait(lock);
 				}
 				else
 				{
-					no_frame = true;
+					targetInterval = 1'000'000'000ul / nTargetFPS;
+					auto wait_time = std::chrono::nanoseconds(int64_t(lastCommitReleased + targetInterval) - get_time_in_nanos());
+					if ( wait_time > std::chrono::nanoseconds(0) )
+					{
+						no_frame = g_TargetFPSCondition.wait_for(lock, std::chrono::nanoseconds(wait_time)) == std::cv_status::timeout;
+					}
+					else
+					{
+						no_frame = true;
+					}
 				}
 			}
 			nTargetFPS = g_nFpsLimitTargetFPS;
 			lastFullFrameTime = g_uFPSLimitLastFullFrameTime;
 			donetodonetime = g_uFPSLimitDoneToDoneTime;
+			g_uPendingFrameCount = 0;
 		}
 
 		const int refresh = g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
@@ -244,7 +250,6 @@ void fpslimitThreadRun( void )
 
 		// If the last frame was late, and this isn't a late frame
 		// ignore it, as this is that late frame.
-		if ( !last_frame_was_late || no_frame )
 		{
 			if ( no_frame )
 				consecutive_missed_frame_count++;
@@ -260,9 +265,21 @@ void fpslimitThreadRun( void )
 				// on vblank count.
 				bool useFrameCallbacks = fpslimit_use_frame_callbacks_for_focus_window( nTargetFPS, 0 );
 
-				uint64_t t0 = lastCommitReleased;
+				// TODO: This still doesn't work...
+				// Need to find the PROPER time each incoming commit was released
+				// What I have tried
+				// Queue of commit release times and popping off associated with each stored buffer
+				// This:
+				// Still can't get the right times in latent situations and IDK What to do... :(
 				uint64_t t1 = lastFullFrameTime;
-			
+				uint64_t t0;
+				if ( t1 < lastCommitReleased[0] && t1 < lastCommitReleased[1] )
+					t0 = std::min( lastCommitReleased[0], lastCommitReleased[1] );
+				else if ( t1 < lastCommitReleased[0] )
+					t0 = lastCommitReleased[0];
+				else //if ( t1 < lastCommitReleased[1] )
+					t0 = lastCommitReleased[1];
+
 				// Not the actual frame time of the game
 				// this is the time of the amount of work a 'frame' has done.
 				uint64_t frameTime = t1 - t0;
@@ -310,7 +327,6 @@ void fpslimitThreadRun( void )
 					// Take the min of it to the target interval - the fps limiter redzone
 					// so that we don't go over the target interval - expected vblank time
 					sleepyTime -= std::max( rollingMaxFrameTime, g_uMinFPSLimiter );
-					sleepyTime -= int64_t(g_uFPSLimiterRedZoneNS);
 					// Don't roll back before current vblank
 					// based on varying frame time otherwise we can become divergent
 					// if these value change how we do not expect and get stuck in a feedback loop.
@@ -319,6 +335,7 @@ void fpslimitThreadRun( void )
 					{
 						sleepyTime = min_sleepy_time;
 					}
+					sleepyTime -= int64_t(g_uFPSLimiterRedZoneNS);
 					sleepyTime = std::max<int64_t>( sleepyTime, min_sleepy_time );
 					sleepyTime -= int64_t(std::max<uint64_t>(rollingMaxDrawTime, g_uDefaultMinVBlankTime));
 					sleepyTime -= int64_t(g_uVblankDrawBufferRedZoneNS);
@@ -344,7 +361,7 @@ void fpslimitThreadRun( void )
 
 				if ( !no_frame )
 				{
-					mangoapp_update( isLatent ? donetodonetime : targetInterval, frameTime, latency );
+					//mangoapp_update( isLatent ? donetodonetime : targetInterval, frameTime, latency );
 				}
 
 		#ifdef FPS_LIMIT_DEBUG
@@ -353,8 +370,10 @@ void fpslimitThreadRun( void )
 
 
 				sleep_until_nanos( targetPoint );
-				lastCommitReleased = get_time_in_nanos();
+				uint64_t t2 = get_time_in_nanos();
 				isLatent = steamcompmgr_fpslimit_release_commit( consecutive_missed_frame_count );
+				if ( !isLatent )
+					lastCommitReleased[frameIdx++ % 2] = t2;
 
 				// If we aren't vblank aligned, nudge ourselves to process done commits now.
 				if ( !useFrameCallbacks )
@@ -364,15 +383,6 @@ void fpslimitThreadRun( void )
 				}
 			}
 		}
-		else if ( last_frame_was_late && !no_frame )
-		{
-			if ( nTargetFPS )
-			{
-				mangoapp_update( donetodonetime, donetodonetime, ( refresh % nTargetFPS == 0 ) ? 0 : uint64_t(~0ull) );
-			}
-		}
-
-		last_frame_was_late = no_frame;
 	}
 }
 
@@ -399,6 +409,7 @@ void fpslimit_mark_frame( uint64_t frametime )
 		std::unique_lock<std::mutex> lock(g_TargetFPSMutex);
 		g_uFPSLimitLastFullFrameTime = now;
 		g_uFPSLimitDoneToDoneTime = frametime;
+		g_uPendingFrameCount++;
 	}
 	g_TargetFPSCondition.notify_all();
 }

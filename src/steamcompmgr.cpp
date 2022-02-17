@@ -270,7 +270,7 @@ bool steamcompmgr_fpslimit_release_commit( int consecutive_missed_frame_count )
 
 	// Only allow 1 latent buffer -- essentially go to only "double
 	// buffering" when we are falling behind.
-	if ( g_nAppBufferCount == g_nMaxAppBufferCount )
+	if ( g_nAppBufferCount >= g_nMaxAppBufferCount - 1 )
 	{
 		if ( !g_FrameLimitCommits.empty() )
 		{
@@ -3443,7 +3443,7 @@ handle_net_wm_state(xwayland_ctx_t *ctx, win *w, XClientMessageEvent *ev)
 	}
 }
 
-bool g_bLowLatency = true;
+bool g_bLowLatency = false;
 
 static void
 handle_system_tray_opcode(xwayland_ctx_t *ctx, XClientMessageEvent *ev)
@@ -4223,7 +4223,7 @@ void check_new_wayland_res(xwayland_ctx_t *ctx)
 					.ctx = ctx,
 					.fence = fence,
 					.fps_nudge = fps_nudge,
-					.mangoapp_nudge = mango_nudge && !steamcompmgr_window_should_limit_fps( w ),
+					.mangoapp_nudge = mango_nudge, //&& !steamcompmgr_window_should_limit_fps( w ),
 					.commitID = newCommit->commitID,
 				};
 				waitList.push_back( entry );
