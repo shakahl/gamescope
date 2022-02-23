@@ -1031,7 +1031,7 @@ static void compile_all_pipelines(void)
 						continue;
 					if (radius && type != SHADER_TYPE_BLUR && type != SHADER_TYPE_BLUR_COND && type != SHADER_TYPE_BLUR_FIRST_PASS)
 						continue;
-					if ((ycbcrMask > 1 || layerCount > 0) && type == SHADER_TYPE_BLUR_FIRST_PASS)
+					if ((ycbcrMask > 1 || layerCount > 1) && type == SHADER_TYPE_BLUR_FIRST_PASS)
 						continue;
 
 					VkPipeline newPipeline = compile_vk_pipeline(layerCount, ycbcrMask, radius, type);
@@ -2617,13 +2617,7 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 		struct VulkanPipeline_t blurLayers = *pPipeline;
 		blurLayers.layerBindings[0].bFilter = true;
 
-		uint32_t inputX = blurLayers.layerBindings[0].tex->m_width;
-		uint32_t inputY = blurLayers.layerBindings[0].tex->m_height;
-
-		uint32_t tempX = float(inputX) / blurComposite.data.vScale[0].x;
-		uint32_t tempY = float(inputY) / blurComposite.data.vScale[0].y;
-
-		update_tmp_images(tempX, tempY);
+		update_tmp_images(currentOutputWidth, currentOutputHeight);
 
 		memoryBarrier.image = g_output.tmpOutput->m_vkImage;
 		vkCmdPipelineBarrier( curCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -2631,7 +2625,12 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 
 		ShaderType type = SHADER_TYPE_BLUR_FIRST_PASS;
 
-		vkCmdBindPipeline(curCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, get_vk_pipeline(0, blurComposite.nYCBCRMask & 0x1u, blurComposite.blurRadius, type));
+		uint32_t blur_layer_count = 0;
+		// Also blur the override on top if we have one.
+		if (blurComposite.nLayerCount >= 2 && blurLayers.layerBindings[1].zpos == g_zposOverride)
+			blur_layer_count++;
+
+		vkCmdBindPipeline(curCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, get_vk_pipeline(blur_layer_count, blurComposite.nYCBCRMask & 0x1u, blurComposite.blurRadius, type));
 
 		VkDescriptorSet descriptorSet = vulkan_update_descriptor( &blurLayers, pComposite->nYCBCRMask, false, true, g_output.tmpOutput->m_srgbView );
 
@@ -2640,8 +2639,8 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 
 		vkCmdPushConstants(curCommandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(blurComposite.data), &blurComposite.data);
 
-		uint32_t nGroupCountX = tempX % 8 ? tempX / 8 + 1: tempX / 8;
-		uint32_t nGroupCountY = tempY % 8 ? tempY / 8 + 1: tempY / 8;
+		uint32_t nGroupCountX = currentOutputWidth % 8 ? currentOutputWidth / 8 + 1: currentOutputWidth / 8;
+		uint32_t nGroupCountY = currentOutputHeight % 8 ? currentOutputHeight / 8 + 1: currentOutputHeight / 8;
 
 		vkCmdDispatch( curCommandBuffer, nGroupCountX, nGroupCountY, 1 );
 
@@ -2660,6 +2659,22 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 
 		vkCmdPipelineBarrier( curCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			      		0, 0, nullptr, 0, nullptr, 1, &memoryBarrier );
+
+		// Budge other layers down if we included the override redirect to blur before.
+		if (blur_layer_count == 1)
+		{
+			for (int i = 2; i < blurComposite.nLayerCount; i++)
+			{
+				blurComposite.data.vScale[i - 1] = blurComposite.data.vScale[i];
+				blurComposite.data.vOffset[i - 1] = blurComposite.data.vOffset[i];
+				blurComposite.data.flOpacity[i - 1] = blurComposite.data.flOpacity[i];
+
+				blurLayers.layerBindings[i - 1] = std::move(blurLayers.layerBindings[i]);
+			}
+
+			blurComposite.data.nBorderMask = (blurComposite.data.nBorderMask & 0b1) | ((blurComposite.data.nBorderMask & 0b11111100) >> 1);
+			blurComposite.nLayerCount--;
+		}
 
 		descriptorSet = vulkan_update_descriptor( &blurLayers, blurComposite.nYCBCRMask, false, false, targetImageView, g_output.tmpOutput->m_linearView );
 
