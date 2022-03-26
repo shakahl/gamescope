@@ -34,3 +34,4 @@ extern int g_nNewNice;
 extern int g_nXWaylandCount;
 
 bool BIsNested( void );
+bool BIsLeased( void );

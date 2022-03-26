@@ -636,7 +636,7 @@ bool wlsession_init( void ) {
 
 	wlserver.display = wl_display_create();
 
-	if ( BIsNested() )
+	if ( BIsNested() || BIsLeased() )
 		return true;
 
 	wlserver.wlr.session = wlr_session_create( wlserver.display );
@@ -732,7 +732,7 @@ bool wlserver_init( void ) {
 
 	wlserver.wlr.output = wlr_headless_add_output( wlserver.wlr.headless_backend, 1280, 720 );
 
-	if ( bIsDRM == True )
+	if ( bIsDRM == True && !BIsLeased() )
 	{
 		wlserver.wlr.libinput_backend = wlr_libinput_backend_create( wlserver.display, wlserver.wlr.session );
 		if ( wlserver.wlr.libinput_backend == NULL)

@@ -627,32 +627,39 @@ char *find_drm_node_by_devid(dev_t devid)
 	return name;
 }
 
-bool init_drm(struct drm_t *drm, int width, int height, int refresh)
+bool init_drm(struct drm_t *drm, int width, int height, int refresh, int fd)
 {
 	drm->preferred_width = width;
 	drm->preferred_height = height;
 	drm->preferred_refresh = refresh;
 
-	char *device_name = nullptr;
-	if (g_vulkanHasDrmPrimaryDevId) {
-		device_name = find_drm_node_by_devid(g_vulkanDrmPrimaryDevId);
-		if (device_name == nullptr) {
-			drm_log.errorf("Failed to find DRM device with device ID %" PRIu64, (uint64_t)g_vulkanDrmPrimaryDevId);
+	if (fd == -1)
+	{
+		char *device_name = nullptr;
+		if (g_vulkanHasDrmPrimaryDevId) {
+			device_name = find_drm_node_by_devid(g_vulkanDrmPrimaryDevId);
+			if (device_name == nullptr) {
+				drm_log.errorf("Failed to find DRM device with device ID %" PRIu64, (uint64_t)g_vulkanDrmPrimaryDevId);
+				return false;
+			}
+			drm_log.infof("opening DRM node '%s'", device_name);
+		}
+		else
+		{
+			drm_log.infof("warning: picking an arbitrary DRM device");
+		}
+
+		drm->fd = wlsession_open_kms( device_name );
+		free(device_name);
+		if ( drm->fd < 0 )
+		{
+			drm_log.errorf("Could not open KMS device");
 			return false;
 		}
-		drm_log.infof("opening DRM node '%s'", device_name);
 	}
 	else
 	{
-		drm_log.infof("warning: picking an arbitrary DRM device");
-	}
-
-	drm->fd = wlsession_open_kms( device_name );
-	free(device_name);
-	if ( drm->fd < 0 )
-	{
-		drm_log.errorf("Could not open KMS device");
-		return false;
+		drm->fd = fd;
 	}
 
 	if (drmSetClientCap(drm->fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0) {
@@ -774,12 +781,16 @@ void finish_drm(struct drm_t *drm)
 	drmModeAtomicReq *req = drmModeAtomicAlloc();
 	for ( auto &kv : drm->connectors ) {
 		struct connector *conn = &kv.second;
-		add_connector_property(req, conn, "CRTC_ID", 0);
+		if ( !BIsLeased() )
+			add_connector_property(req, conn, "CRTC_ID", 0);
 	}
 	for ( size_t i = 0; i < drm->crtcs.size(); i++ ) {
-		add_crtc_property(req, &drm->crtcs[i], "MODE_ID", 0);
+		if ( !BIsLeased() )
+		{
+			add_crtc_property(req, &drm->crtcs[i], "MODE_ID", 0);
+			add_crtc_property(req, &drm->crtcs[i], "ACTIVE", 0);
+		}
 		add_crtc_property(req, &drm->crtcs[i], "GAMMA_LUT", 0);
-		add_crtc_property(req, &drm->crtcs[i], "ACTIVE", 0);
 	}
 	for ( size_t i = 0; i < drm->planes.size(); i++ ) {
 		struct plane *plane = &drm->planes[i];

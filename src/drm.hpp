@@ -142,7 +142,7 @@ enum drm_mode_generation {
 
 extern enum drm_mode_generation g_drmModeGeneration;
 
-bool init_drm(struct drm_t *drm, int width, int height, int refresh);
+bool init_drm(struct drm_t *drm, int width, int height, int refresh, int fd);
 void finish_drm(struct drm_t *drm);
 int drm_commit(struct drm_t *drm, struct Composite_t *pComposite, struct VulkanPipeline_t *pPipeline );
 int drm_prepare( struct drm_t *drm, const struct Composite_t *pComposite, const struct VulkanPipeline_t *pPipeline );

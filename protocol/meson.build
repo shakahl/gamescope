@@ -6,6 +6,7 @@ protocols = [
 	'gamescope-xwayland',
 	'gamescope-pipewire',
 	'gamescope-input-method',
+	'drm-lease-v1',
 ]
 
 foreach name : protocols
@@ -16,6 +17,13 @@ foreach name : protocols
 		command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 	)
 
+	client_header = custom_target(
+		name + '-client-protocol.h',
+		input: name + '.xml',
+		output: '@BASENAME@-client-protocol.h',
+		command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+	)
+
 	server_header = custom_target(
 		name + '-protocol.h',
 		input: name + '.xml',
@@ -23,5 +31,5 @@ foreach name : protocols
 		command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
 	)
 
-	src += [code, server_header]
+	src += [code, server_header, client_header]
 endforeach
