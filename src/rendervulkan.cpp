@@ -2262,6 +2262,145 @@ std::shared_ptr<CVulkanTexture> vulkan_create_texture_from_bits( uint32_t width,
 	return pTex;
 }
 
+VulkanScreenshotBuffer_t vulkan_syscopy_texture( CVulkanTexture *pInTexture )
+{
+	VulkanScreenshotBuffer_t out = {};
+
+	// Not yet.
+	if (pInTexture->m_format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
+		return out;
+
+	VkCommandBuffer commandBuffer;
+	uint32_t handle = get_command_buffer( commandBuffer );
+
+	VkBufferCreateInfo bufferCreateInfo = {};
+	bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferCreateInfo.size  = sizeof(uint32_t) * pInTexture->m_width * pInTexture->m_height;
+	bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	VkBuffer buffer;
+	VkResult result = vkCreateBuffer( device, &bufferCreateInfo, nullptr, &buffer );
+	if ( result != VK_SUCCESS )
+	{
+		return out;
+	}
+
+	VkMemoryRequirements memRequirements;
+	vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
+	int memTypeIndex = findMemoryType(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT|VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, memRequirements.memoryTypeBits );
+	if ( memTypeIndex == -1 )
+	{
+		vkDestroyBuffer( device, buffer, nullptr );
+		return out;
+	}
+
+	VkMemoryAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequirements.size;
+	allocInfo.memoryTypeIndex = memTypeIndex;
+
+	VkDeviceMemory bufferMemory;
+	result = vkAllocateMemory( device, &allocInfo, nullptr, &bufferMemory);
+	if ( result != VK_SUCCESS )
+	{
+		vkDestroyBuffer( device, buffer, nullptr );
+		return out;
+	}
+
+	result = vkBindBufferMemory( device, buffer, bufferMemory, 0 );
+	if ( result != VK_SUCCESS )
+	{
+		vkDestroyBuffer( device, buffer, nullptr );
+		vkFreeMemory( device, bufferMemory, nullptr );
+		return out;
+	}
+
+	void *dst;
+	result = vkMapMemory( device, bufferMemory, 0, VK_WHOLE_SIZE, 0, &dst );
+	if ( result != VK_SUCCESS )
+	{
+		vkDestroyBuffer( device, buffer, nullptr );
+		vkFreeMemory( device, bufferMemory, nullptr );
+		return out;
+	}
+
+	VkImageSubresourceLayers subResLayers =
+	{
+		.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+		.mipLevel       = 0,
+		.baseArrayLayer = 0,
+		.layerCount     = 1
+	};
+
+	VkImageSubresourceRange subResRange =
+	{
+		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.levelCount = 1,
+		.layerCount = 1
+	};
+
+	VkImageMemoryBarrier barrier;
+	barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.pNext               = nullptr;
+	barrier.srcAccessMask       = 0;
+	barrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+	barrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+	barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+	barrier.srcQueueFamilyIndex = g_vulkanSupportsModifiers
+									? VK_QUEUE_FAMILY_FOREIGN_EXT
+									: VK_QUEUE_FAMILY_EXTERNAL_KHR;
+	barrier.dstQueueFamilyIndex = queueFamilyIndex;
+	barrier.image               = pInTexture->m_vkImage;
+	barrier.subresourceRange    = subResRange;
+
+	vkCmdPipelineBarrier( commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+						0, 0, nullptr, 0, nullptr, 1, &barrier );
+
+	VkBufferImageCopy region =
+	{
+		.bufferOffset      = 0,
+		.bufferRowLength   = 0,
+		.bufferImageHeight = 0,
+		.imageSubresource  = subResLayers,
+		.imageOffset       = VkOffset3D{ 0, 0, 0 },
+		.imageExtent       = VkExtent3D{ pInTexture->m_width, pInTexture->m_height, 1u },
+	};
+	vkCmdCopyImageToBuffer( commandBuffer, pInTexture->m_vkImage, VK_IMAGE_LAYOUT_GENERAL, buffer, 1, &region );
+
+	barrier.dstAccessMask       = 0;
+	barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+	barrier.srcQueueFamilyIndex = queueFamilyIndex;
+	barrier.dstQueueFamilyIndex = g_vulkanSupportsModifiers
+									? VK_QUEUE_FAMILY_FOREIGN_EXT
+									: VK_QUEUE_FAMILY_EXTERNAL_KHR;
+
+	vkCmdPipelineBarrier( commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			      		0, 0, nullptr, 0, nullptr, 1, &barrier );
+
+ 	std::vector<std::shared_ptr<CVulkanTexture>> refs;
+	submit_command_buffer( handle, refs );
+
+	vkQueueWaitIdle( queue );
+
+	out.buffer = buffer;
+	out.extent = region.imageExtent;
+	out.memory = bufferMemory;
+	out.ptr    = dst;
+	out.format = pInTexture->m_format;
+	return out;
+}
+
+void vulkan_cleanup_screenshot_buffer(VulkanScreenshotBuffer_t &buffy)
+{
+	// Invalid.
+	if (!buffy.ptr)
+		return;
+
+	vkDestroyBuffer( device, buffy.buffer, nullptr );
+	vkUnmapMemory( device, buffy.memory );
+	vkFreeMemory( device, buffy.memory, nullptr );
+}
+
 VkSampler vulkan_make_sampler( VulkanSamplerCacheKey_t key )
 {
 	if ( g_vulkanSamplerCache.count(key) != 0 )

@@ -178,6 +178,18 @@ std::shared_ptr<CVulkanTexture> vulkan_create_texture_from_dmabuf( struct wlr_dm
 std::shared_ptr<CVulkanTexture> vulkan_create_texture_from_bits( uint32_t width, uint32_t height, uint32_t drmFormat, CVulkanTexture::createFlags texCreateFlags, void *bits );
 std::shared_ptr<CVulkanTexture> vulkan_create_texture_from_wlr_buffer( struct wlr_buffer *buf );
 
+struct VulkanScreenshotBuffer_t
+{
+	VkFormat format;
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	VkExtent3D extent;
+	void *ptr;
+};
+
+VulkanScreenshotBuffer_t vulkan_syscopy_texture( CVulkanTexture *pInTexture );
+void vulkan_cleanup_screenshot_buffer(VulkanScreenshotBuffer_t &buffy);
+
 uint32_t vulkan_texture_get_fbid( const std::shared_ptr<CVulkanTexture>& vulkanTex );
 int vulkan_texture_get_fence( const std::shared_ptr<CVulkanTexture>& vulkanTex );
 

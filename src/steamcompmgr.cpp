@@ -62,6 +62,7 @@
 #include <spawn.h>
 #include <signal.h>
 #include <linux/input-event-codes.h>
+#include <vulkan/vulkan_core.h>
 
 #include "xwayland_ctx.hpp"
 
@@ -310,7 +311,7 @@ struct wlr_buffer_map_entry {
 static std::mutex wlr_buffer_map_lock;
 static std::unordered_map<struct wlr_buffer*, wlr_buffer_map_entry> wlr_buffer_map;
 
-static std::atomic< bool > g_bTakeScreenshot{false};
+static std::atomic< uint32_t > g_uTakeScreenshot{ 0 };
 static bool g_bPropertyRequestedScreenshot;
 
 static int g_nudgePipe[2] = {-1, -1};
@@ -1482,6 +1483,54 @@ static void update_touch_scaling( struct Composite_t *pComposite )
 	focusedWindowOffsetY = pComposite->data.vOffset[ pComposite->nLayerCount - 1 ].y;
 }
 
+static bool
+win_has_game_id( win *w )
+{
+	return w->appID != 0;
+}
+
+static bool
+win_is_useless( win *w )
+{
+	// Windows that are 1x1 are pretty useless for override redirects.
+	// Just ignore them.
+	// Fixes the Xbox Login in Age of Empires 2: DE.
+	return w->a.width == 1 && w->a.height == 1;
+}
+
+static bool
+win_is_override_redirect( win *w )
+{
+	return w->a.override_redirect && !w->ignoreOverrideRedirect && !win_is_useless( w );
+}
+
+static bool
+win_skip_taskbar_and_pager( win *w )
+{
+	return w->skipTaskbar && w->skipPager;
+}
+
+static bool
+win_maybe_a_dropdown( win *w )
+{
+	bool valid_maybe_a_dropdown =
+		w->maybe_a_dropdown && ( ( !w->is_dialog || win_skip_taskbar_and_pager( w ) ) && ( w->skipPager || w->skipTaskbar ) );
+	return ( valid_maybe_a_dropdown || win_is_override_redirect( w ) ) && !win_is_useless( w );
+}
+
+static bool win_external_focusable(win *w)
+{
+	return !win_is_useless( w ) && !win_maybe_a_dropdown(w) && !win_skip_taskbar_and_pager(w) && !w->isOverlay && !w->isExternalOverlay;
+}
+
+static bool
+win_is_valid_focus_window(win *w)
+{
+	return w->a.map_state == IsViewable && w->a.c_class == InputOutput && w->isOverlay == false && w->isExternalOverlay == false &&
+			( win_has_game_id( w ) || w->isSteam || w->isSteamStreamingClient ) &&
+			(w->opacity > TRANSLUCENT || w->isSteamStreamingClient == true ) && !w->isSysTrayIcon;
+}
+
 static void
 paint_all()
 {
@@ -1696,7 +1745,7 @@ paint_all()
 	bool bDoComposite = true;
 
 	// Handoff from whatever thread to this one since we check ours twice
-	bool takeScreenshot = g_bTakeScreenshot.exchange(false);
+	uint32_t takeScreenshot = g_uTakeScreenshot.exchange( 0 );
 	bool propertyRequestedScreenshot = g_bPropertyRequestedScreenshot;
 	g_bPropertyRequestedScreenshot = false;
 
@@ -1705,7 +1754,8 @@ paint_all()
 	pw_buffer = dequeue_pipewire_buffer();
 #endif
 
-	bool bCapture = takeScreenshot || pw_buffer != nullptr;
+	bool bWholeScreenScreenshot = takeScreenshot == 1;
+	bool bCapture = bWholeScreenScreenshot || pw_buffer != nullptr;
 
 	int nTargetRefresh = g_nDynamicRefreshRate && steamcompmgr_window_should_limit_fps( global_focus.focusWindow )// && !global_focus.overlayWindow
 		? g_nDynamicRefreshRate
@@ -1814,54 +1864,141 @@ paint_all()
 
 		if ( takeScreenshot )
 		{
-			assert( pCaptureTexture != nullptr );
-			assert( pCaptureTexture->m_format == VK_FORMAT_B8G8R8A8_UNORM );
+			if ( bWholeScreenScreenshot )
+			{
+				assert( pCaptureTexture != nullptr );
+				assert( pCaptureTexture->m_format == VK_FORMAT_B8G8R8A8_UNORM );
 
-			std::thread screenshotThread = std::thread([=] {
-				pthread_setname_np( pthread_self(), "gamescope-scrsh" );
+				// The whole screen
+				std::thread screenshotThread = std::thread([pCaptureTexture, propertyRequestedScreenshot, root_ctx] {
+					pthread_setname_np( pthread_self(), "gamescope-scrsh" );
 
-				const uint8_t *mappedData = reinterpret_cast<const uint8_t *>(pCaptureTexture->m_pMappedData);
+					const uint8_t *mappedData = reinterpret_cast<const uint8_t *>(pCaptureTexture->m_pMappedData);
 
-				// Make our own copy of the image to remove the alpha channel.
-				auto imageData = std::vector<uint8_t>(currentOutputWidth * currentOutputHeight * 4);
-				const uint32_t comp = 4;
-				const uint32_t pitch = currentOutputWidth * comp;
-				for (uint32_t y = 0; y < currentOutputHeight; y++)
-				{
-					for (uint32_t x = 0; x < currentOutputWidth; x++)
+					// Make our own copy of the image to remove the alpha channel.
+					auto imageData = std::vector<uint8_t>(currentOutputWidth * currentOutputHeight * 4);
+					const uint32_t comp = 4;
+					const uint32_t pitch = currentOutputWidth * comp;
+					for (uint32_t y = 0; y < currentOutputHeight; y++)
 					{
-						// BGR...
-						imageData[y * pitch + x * comp + 0] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 2];
-						imageData[y * pitch + x * comp + 1] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 1];
-						imageData[y * pitch + x * comp + 2] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 0];
-						imageData[y * pitch + x * comp + 3] = 255;
+						for (uint32_t x = 0; x < currentOutputWidth; x++)
+						{
+							// BGR...
+							imageData[y * pitch + x * comp + 0] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 2];
+							imageData[y * pitch + x * comp + 1] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 1];
+							imageData[y * pitch + x * comp + 2] = mappedData[y * pCaptureTexture->m_unRowPitch + x * comp + 0];
+							imageData[y * pitch + x * comp + 3] = 255;
+						}
+					}
+
+					char pTimeBuffer[1024] = "/tmp/gamescope.png";
+
+					if ( !propertyRequestedScreenshot )
+					{
+						time_t currentTime = time(0);
+						struct tm *localTime = localtime( &currentTime );
+						strftime( pTimeBuffer, sizeof( pTimeBuffer ), "/tmp/gamescope_%Y-%m-%d_%H-%M-%S.png", localTime );
+					}
+
+					if ( stbi_write_png(pTimeBuffer, currentOutputWidth, currentOutputHeight, 4, imageData.data(), pitch) )
+					{
+						xwm_log.infof("Screenshot saved to %s", pTimeBuffer);
+					}
+					else
+					{
+						xwm_log.errorf( "Failed to save screenshot to %s", pTimeBuffer );
+					}
+
+					XDeleteProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeScreenShotAtom );
+				});
+
+				screenshotThread.detach();
+			}
+			else
+			{
+				// All windows of an appid.
+				struct AppWindowScreenshotDesc_t
+				{
+					Window window;
+					VulkanScreenshotBuffer_t bufferInfo;
+				};
+				std::vector<AppWindowScreenshotDesc_t> screenshot_infos;
+
+				gamescope_xwayland_server_t *server = NULL;
+				for (size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++)
+				{
+					auto ctx = server->ctx.get();
+					for (win *w = ctx->list; w; w = w->next)
+					{
+						if ( win_is_valid_focus_window( w ) && win_external_focusable( w ) && w->appID == takeScreenshot && !w->commit_queue.empty() )
+						{
+							std::shared_ptr<commit_t> commit;
+							get_window_last_done_commit( w, commit );
+
+							AppWindowScreenshotDesc_t desc = {
+								.window = w->id,
+								.bufferInfo = vulkan_syscopy_texture( commit->vulkanTex.get() ),
+							};
+
+							// Are we valid
+							if (desc.bufferInfo.ptr)
+								screenshot_infos.emplace_back(desc);
+						}
 					}
 				}
 
-				char pTimeBuffer[1024] = "/tmp/gamescope.png";
-
-				if ( !propertyRequestedScreenshot )
+				if (!screenshot_infos.empty())
 				{
-					time_t currentTime = time(0);
-					struct tm *localTime = localtime( &currentTime );
-					strftime( pTimeBuffer, sizeof( pTimeBuffer ), "/tmp/gamescope_%Y-%m-%d_%H-%M-%S.png", localTime );
-				}
+					std::thread screenshotThread = std::thread([root_ctx, cInfos = std::move(screenshot_infos)] () mutable {
+						pthread_setname_np( pthread_self(), "gamescope-scrsh" );
 
-				if ( stbi_write_png(pTimeBuffer, currentOutputWidth, currentOutputHeight, 4, imageData.data(), pitch) )
-				{
-					xwm_log.infof("Screenshot saved to %s", pTimeBuffer);
+						for ( AppWindowScreenshotDesc_t &info : cInfos )
+						{
+							const uint8_t *mappedData = reinterpret_cast<const uint8_t *>(info.bufferInfo.ptr);
+
+							// Make our own copy of the image to remove the alpha channel.
+							auto imageData = std::vector<uint8_t>(info.bufferInfo.extent.width * info.bufferInfo.extent.height * 4);
+							const uint32_t comp = 4;
+							const uint32_t pitch = info.bufferInfo.extent.width * comp;
+							for (uint32_t y = 0; y < info.bufferInfo.extent.height; y++)
+							{
+								for (uint32_t x = 0; x < info.bufferInfo.extent.width; x++)
+								{
+									// BGR...
+									imageData[y * pitch + x * comp + 0] = mappedData[y * pitch + x * comp + 2];
+									imageData[y * pitch + x * comp + 1] = mappedData[y * pitch + x * comp + 1];
+									imageData[y * pitch + x * comp + 2] = mappedData[y * pitch + x * comp + 0];
+									imageData[y * pitch + x * comp + 3] = 255;
+								}
+							}
+
+							char pTimeBuffer[1024];
+							snprintf(pTimeBuffer, 1024, "/tmp/gamescope_window_%lx.png", info.window);
+
+							if ( stbi_write_png(pTimeBuffer, info.bufferInfo.extent.width, info.bufferInfo.extent.height, 4, imageData.data(), pitch) )
+							{
+								xwm_log.infof("Screenshot saved to %s", pTimeBuffer);
+							}
+							else
+							{
+								xwm_log.errorf( "Failed to save screenshot to %s", pTimeBuffer );
+							}
+
+							vulkan_cleanup_screenshot_buffer( info.bufferInfo );
+						}
+
+						XDeleteProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeScreenShotAtom );
+					});
+
+					screenshotThread.detach();
 				}
 				else
 				{
-					xwm_log.errorf( "Failed to save screenshot to %s", pTimeBuffer );
+					XDeleteProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeScreenShotAtom );
 				}
+			}
 
-				XDeleteProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeScreenShotAtom );
-			});
-
-			screenshotThread.detach();
-
-			takeScreenshot = false;
+			takeScreenshot = 0;
 		}
 
 #if HAVE_PIPEWIRE
@@ -1945,41 +2082,6 @@ bool get_prop( xwayland_ctx_t *ctx, Window win, Atom prop, std::vector< uint32_t
 		return true;
 	}
 	return false;
-}
-
-static bool
-win_has_game_id( win *w )
-{
-	return w->appID != 0;
-}
-
-static bool
-win_is_useless( win *w )
-{
-	// Windows that are 1x1 are pretty useless for override redirects.
-	// Just ignore them.
-	// Fixes the Xbox Login in Age of Empires 2: DE.
-	return w->a.width == 1 && w->a.height == 1;
-}
-
-static bool
-win_is_override_redirect( win *w )
-{
-	return w->a.override_redirect && !w->ignoreOverrideRedirect && !win_is_useless( w );
-}
-
-static bool
-win_skip_taskbar_and_pager( win *w )
-{
-	return w->skipTaskbar && w->skipPager;
-}
-
-static bool
-win_maybe_a_dropdown( win *w )
-{
-	bool valid_maybe_a_dropdown =
-		w->maybe_a_dropdown && ( ( !w->is_dialog || win_skip_taskbar_and_pager( w ) ) && ( w->skipPager || w->skipTaskbar ) );
-	return ( valid_maybe_a_dropdown || win_is_override_redirect( w ) ) && !win_is_useless( w );
 }
 
 /* Returns true if a's focus priority > b's.
@@ -2251,9 +2353,7 @@ determine_and_apply_focus(xwayland_ctx_t *ctx, std::vector<win*>& vecGlobalPossi
 			continue;
 		}
 
-		if ( w->a.map_state == IsViewable && w->a.c_class == InputOutput && w->isOverlay == false && w->isExternalOverlay == false &&
-			( win_has_game_id( w ) || w->isSteam || w->isSteamStreamingClient ) &&
-			 (w->opacity > TRANSLUCENT || w->isSteamStreamingClient == true ) )
+		if ( win_is_valid_focus_window( w ) )
 		{
 			vecPossibleFocusWindows.push_back( w );
 		}
@@ -2482,9 +2582,7 @@ determine_and_apply_focus()
 	{
 		// Exclude windows that are useless (1x1), skip taskbar + pager or override redirect windows
 		// from the reported focusable windows to Steam.
-		if ( win_is_useless( focusable_window ) ||
-			win_skip_taskbar_and_pager( focusable_window ) ||
-			focusable_window->a.override_redirect )
+		if ( !win_external_focusable( focusable_window ) )
 			continue;
 
 		unsigned int unAppID = focusable_window->appID;
@@ -3665,7 +3763,8 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 	{
 		if ( ev->state == PropertyNewValue )
 		{
-			g_bTakeScreenshot = true;
+			uint32_t appID = get_prop( ctx, ctx->root, ctx->atoms.gamescopeScreenShotAtom, None );
+			g_uTakeScreenshot = appID;
 			g_bPropertyRequestedScreenshot = true;
 		}
 	}
@@ -4213,7 +4312,7 @@ void nudge_steamcompmgr( void )
 
 void take_screenshot( void )
 {
-	g_bTakeScreenshot = true;
+	g_uTakeScreenshot = 1;
 	nudge_steamcompmgr();
 }
 
@@ -5137,7 +5236,7 @@ steamcompmgr_main(int argc, char **argv)
 		if (focusDirty)
 			determine_and_apply_focus();
 
-		if ( ( g_bTakeScreenshot == true || hasRepaint == true || is_fading_out() ) && vblank == true )
+		if ( ( g_uTakeScreenshot || hasRepaint == true || is_fading_out() ) && vblank == true )
 		{
 			paint_all();
 
