@@ -1,0 +1,53 @@
+#version 450
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+  
+layout(binding = 0, r8)    writeonly uniform image2D dst_luma;
+layout(binding = 1, rg8)   writeonly uniform image2D dst_chroma;
+
+layout(binding = 2, rgba8) readonly uniform image2D src;
+
+layout(push_constant)
+uniform u_info_t {
+  uvec2 half_extent;
+} u_info;
+
+// NV12 Format is:
+// YYYYYYYYYYYYYYY...
+// YYYYYYYYYYYYYYY...
+// UVUVUVUVUVUVUVU...
+
+void main() {
+  ivec3 thread_id = ivec3(gl_GlobalInvocationID);
+
+  if (all(lessThan(thread_id.xy, u_info.half_extent))) {
+    ivec2 offset_table[4] = {
+      ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1),
+    };
+
+    ivec2 chroma_uv = thread_id.xy;
+    ivec2 luma_uv = thread_id.xy * 2;
+
+    vec3 color[4] = {
+      imageLoad(src, ivec2(luma_uv.x + offset_table[0].x, luma_uv.y + offset_table[0].y)).rgb,
+      imageLoad(src, ivec2(luma_uv.x + offset_table[1].x, luma_uv.y + offset_table[1].y)).rgb,
+      imageLoad(src, ivec2(luma_uv.x + offset_table[2].x, luma_uv.y + offset_table[2].y)).rgb,
+      imageLoad(src, ivec2(luma_uv.x + offset_table[3].x, luma_uv.y + offset_table[3].y)).rgb,
+    };
+
+    vec3 avg_color = (color[0] + color[1] + color[2] + color[3]) / 4.0f;
+    vec2 uv = vec2(
+      -0.148f * avg_color.r - 0.291f * avg_color.g + 0.439f * avg_color.b + (128.0f / 255.0f),
+       0.439f * avg_color.r - 0.368f * avg_color.g - 0.071f * avg_color.b + (128.0f / 255.0f)
+    );
+    imageStore(dst_chroma, chroma_uv, vec4(uv, 0.0f, 1.0f));
+
+    for (int i = 0; i < 4; i++) {
+      float y = 0.257f * color[i].r + 0.504f * color[i].g + 0.098f * color[i].b + (16.0f / 255.0f);
+      imageStore(dst_luma, luma_uv + offset_table[i], vec4(y, 0.0f, 0.0f, 1.0f));
+    }
+  }
+}

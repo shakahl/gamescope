@@ -22,6 +22,7 @@
 #include "cs_easu.h"
 #include "cs_easu_fp16.h"
 #include "cs_gaussian_blur_horizontal.h"
+#include "cs_rgb_to_nv12.h"
 
 
 #define A_CPU
@@ -551,6 +552,8 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t drmFormat,
 	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 	allocInfo.allocationSize = memRequirements.size;
 	allocInfo.memoryTypeIndex = findMemoryType(properties, memRequirements.memoryTypeBits );
+
+	m_size = allocInfo.allocationSize;
 	
 	if ( flags.bExportable == true || pDMA != nullptr )
 	{
@@ -777,6 +780,30 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t drmFormat,
 				return false;
 			}
 		}
+
+		if (drmFormat == DRM_FORMAT_NV12) {
+			createInfo.pNext = NULL;
+			createInfo.format = VK_FORMAT_R8_UNORM;
+
+			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+			res = vkCreateImageView(device, &createInfo, nullptr, &m_lumaView);
+			if ( res != VK_SUCCESS ) {
+				vk_errorf( res, "vkCreateImageView failed" );
+				return false;
+			}
+
+			createInfo.pNext = NULL;
+			createInfo.format = VK_FORMAT_R8G8_UNORM;
+			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+			res = vkCreateImageView(device, &createInfo, nullptr, &m_chromaView);
+			if ( res != VK_SUCCESS ) {
+				vk_errorf( res, "vkCreateImageView failed" );
+				return false;
+			}
+
+			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		}
+
 	}
 
 	if ( flags.bMappable )
@@ -2744,6 +2771,21 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 		vkCmdDispatch( curCommandBuffer, nGroupCountX, nGroupCountY, 1 );
 	}
 
+	// Setup motion vector stuff!
+	// Dumped here for now because texture barriers.
+	static std::shared_ptr<CVulkanTexture> pNV12Texture = nullptr;
+	if ( !pNV12Texture )
+	{
+		pNV12Texture = std::make_shared<CVulkanTexture>();
+		CVulkanTexture::createFlags nv12ImageFlags;
+		nv12ImageFlags.bStorage = true;
+		nv12ImageFlags.bExportable = true;
+		nv12ImageFlags.bMappable = true;
+		pNV12Texture->BInit(currentOutputWidth, currentOutputHeight, DRM_FORMAT_NV12, nv12ImageFlags);
+	}
+
+	vulkan_rgb_to_nv12( curCommandBuffer, pPipeline->layerBindings[0].tex, pNV12Texture );
+
 	if ( pScreenshotTexture != nullptr )
 	{
 		std::shared_ptr<CVulkanTexture> pFoundScreenshotImage = nullptr;
@@ -2894,6 +2936,16 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 	}
 	
 	vkQueueWaitIdle( queue );
+
+	// Dump NV12 for debugging.
+	static int foo = 0;
+	char name[64];
+	snprintf(name, 64, "/tmp/test_%d.bin", foo++);
+	FILE *file = fopen(name, "w");
+	char *data = (char*)malloc(pNV12Texture->m_size);
+	memcpy(data, pNV12Texture->m_pMappedData, pNV12Texture->m_size);
+	fwrite(data, pNV12Texture->m_size, 1, file);
+	free(data);
 
 	if ( BIsNested() == false )
 	{
@@ -3138,4 +3190,246 @@ std::shared_ptr<CVulkanTexture> vulkan_create_texture_from_wlr_buffer( struct wl
 	submit_command_buffer( handle, refs );
 
 	return pTex;
+}
+
+struct VkPipelineDesc
+{
+	VkPipeline pipeline;
+	VkPipelineLayout pipelineLayout;
+	VkDescriptorSetLayout descriptorLayout;
+	std::array<VkDescriptorSet, 3> descriptorSets;
+	int nCurrentDescriptorSet;
+};
+
+VkPipelineDesc vulkan_create_rgb_to_nv12_pipeline()
+{
+	VkPipelineDesc out = {};
+
+	std::vector< VkDescriptorSetLayoutBinding > vecLayoutBindings;
+	VkDescriptorSetLayoutBinding descriptorSetLayoutBindings =
+	{
+		.binding = 0,
+		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		.descriptorCount = 1,
+		.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+	};
+	
+	vecLayoutBindings.push_back( descriptorSetLayoutBindings ); // first binding is target luma
+	
+	descriptorSetLayoutBindings.binding = 1; // second binding is target chroma
+	vecLayoutBindings.push_back( descriptorSetLayoutBindings );
+
+	descriptorSetLayoutBindings.binding = 2; // third binding is src chroma
+	vecLayoutBindings.push_back( descriptorSetLayoutBindings );
+
+	VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo =
+	{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.bindingCount = (uint32_t)vecLayoutBindings.size(),
+		.pBindings = vecLayoutBindings.data()
+	};
+	
+	VkDescriptorSetLayout nv12DescriptorSetLayout;
+	VkResult res = vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCreateInfo, 0, &nv12DescriptorSetLayout);
+	if ( res != VK_SUCCESS )
+	{
+		vk_errorf( res, "vkCreateDescriptorSetLayout failed" );
+		return out;
+	}
+
+	VkPushConstantRange pushConstantRange = {
+		.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+		.offset = 0,
+		.size = 2 * sizeof(uint32_t),
+	};
+	
+	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = {
+		VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		0,
+		0,
+		1,
+		&nv12DescriptorSetLayout,
+		1,
+		&pushConstantRange
+	};
+	
+	VkPipelineLayout nv12PipelineLayout;
+	res = vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, 0, &nv12PipelineLayout);
+	if ( res != VK_SUCCESS )
+	{
+		vk_errorf( res, "vkCreatePipelineLayout failed" );
+		return out;
+	}
+
+	VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
+	shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	shaderModuleCreateInfo.codeSize = sizeof(cs_rgb_to_nv12);
+	shaderModuleCreateInfo.pCode = cs_rgb_to_nv12;
+	
+	VkShaderModule shaderModule;
+	res = vkCreateShaderModule( device, &shaderModuleCreateInfo, nullptr, &shaderModule );
+	if ( res != VK_SUCCESS )
+	{
+		vk_errorf( res, "vkCreateShaderModule failed" );
+		return out;
+	}
+
+	VkComputePipelineCreateInfo computePipelineCreateInfo = {
+		VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+		nullptr,
+		0,
+		{
+			VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+			nullptr,
+			0,
+			VK_SHADER_STAGE_COMPUTE_BIT,
+			shaderModule,
+			"main",
+			nullptr,
+		},
+		nv12PipelineLayout,
+		0,
+		0
+	};
+
+	VkPipeline result;
+
+	res = vkCreateComputePipelines(device, 0, 1, &computePipelineCreateInfo, 0, &result);
+	if (res != VK_SUCCESS) {
+		vk_errorf( res, "vkCreateComputePipelines failed" );
+		return out;
+	}
+
+	VkDescriptorPoolSize descriptorPoolSize[] = {
+		{
+			VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+			3 * 3,
+		},
+	};
+	
+	VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.maxSets = 3,
+		.poolSizeCount = sizeof(descriptorPoolSize) / sizeof(descriptorPoolSize[0]),
+		.pPoolSizes = descriptorPoolSize
+	};
+
+	VkDescriptorPool nv12DescriptorPool;
+	res = vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, 0, &nv12DescriptorPool);
+	if ( res != VK_SUCCESS )
+	{
+		vk_errorf( res, "vkCreateDescriptorPool failed" );
+		return out;
+	}
+
+	std::array<VkDescriptorSet, 3> nv12DescriptorSets;
+
+	std::vector<VkDescriptorSetLayout> descriptorSetLayouts(nv12DescriptorSets.size(), nv12DescriptorSetLayout);
+	
+	VkDescriptorSetAllocateInfo descriptorSetAllocateInfo = {
+		VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		nullptr,
+		nv12DescriptorPool,
+		(uint32_t)descriptorSetLayouts.size(),
+		descriptorSetLayouts.data(),
+	};
+	
+	res = vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, nv12DescriptorSets.data());
+	if ( res != VK_SUCCESS )
+	{
+		vk_log.errorf( "vkAllocateDescriptorSets failed" );
+		return out;
+	}
+
+	out = VkPipelineDesc {
+		.pipeline = result,
+		.pipelineLayout = nv12PipelineLayout,
+		.descriptorLayout = nv12DescriptorSetLayout,
+		.descriptorSets = nv12DescriptorSets,
+	};
+
+	return out;
+}
+
+void vulkan_rgb_to_nv12( VkCommandBuffer commandBuffer, std::shared_ptr<CVulkanTexture> pInRGB, std::shared_ptr<CVulkanTexture> pOutNV12 )
+{
+	static VkPipelineDesc pipelineDesc = vulkan_create_rgb_to_nv12_pipeline();
+
+	vkCmdBindPipeline( commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineDesc.pipeline );
+
+	uint32_t halfExtent[2] = { pInRGB->m_width / 2, pInRGB->m_height / 2 };
+	vkCmdPushConstants( commandBuffer, pipelineDesc.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 2 * sizeof(uint32_t), halfExtent );
+
+	{
+		VkDescriptorImageInfo imageInfo[3] =
+		{
+			{
+				.imageView = pOutNV12->m_lumaView,
+				.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+			},
+			{
+				.imageView = pOutNV12->m_chromaView,
+				.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+			},
+			{
+				.imageView = pInRGB->m_srgbView,
+				.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+			},
+		};
+		
+		VkWriteDescriptorSet writeDescriptorSet[3] =
+		{
+			{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.pNext = nullptr,
+				.dstSet = pipelineDesc.descriptorSets[pipelineDesc.nCurrentDescriptorSet],
+				.dstBinding = 0,
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+				.pImageInfo = &imageInfo[0],
+				.pBufferInfo = nullptr,
+				.pTexelBufferView = nullptr,
+			},
+
+			{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.pNext = nullptr,
+				.dstSet = pipelineDesc.descriptorSets[pipelineDesc.nCurrentDescriptorSet],
+				.dstBinding = 1,
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+				.pImageInfo = &imageInfo[1],
+				.pBufferInfo = nullptr,
+				.pTexelBufferView = nullptr,
+			},
+
+			{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.pNext = nullptr,
+				.dstSet = pipelineDesc.descriptorSets[pipelineDesc.nCurrentDescriptorSet],
+				.dstBinding = 2,
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+				.pImageInfo = &imageInfo[2],
+				.pBufferInfo = nullptr,
+				.pTexelBufferView = nullptr,
+			},
+		};
+	
+		vkUpdateDescriptorSets(device, 3, writeDescriptorSet, 0, nullptr);
+	}
+
+	vkCmdBindDescriptorSets( commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineDesc.pipelineLayout, 0, 1, &pipelineDesc.descriptorSets[pipelineDesc.nCurrentDescriptorSet], 0, NULL);
+	pipelineDesc.nCurrentDescriptorSet = ( pipelineDesc.nCurrentDescriptorSet + 1 ) % 3;
+
+	#define MOBY_ALIGN(value, alignment)    (((value) + alignment - 1) & ~(alignment - 1))
+
+	vkCmdDispatch( commandBuffer, MOBY_ALIGN(halfExtent[0], 8), MOBY_ALIGN(halfExtent[1], 8), 1);
 }

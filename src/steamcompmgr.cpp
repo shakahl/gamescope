@@ -31,6 +31,7 @@
 
 #include <X11/Xlib.h>
 #include <cstdint>
+#include <drm_fourcc.h>
 #include <memory>
 #include <thread>
 #include <condition_variable>
@@ -1729,6 +1730,8 @@ paint_all()
 	bNeedsComposite |= composite.blurLayer0;
 	bNeedsComposite |= bNeedsNearest;
 	bNeedsComposite |= bDrewCursor;
+
+	bNeedsComposite = true;
 
 	if ( !bNeedsComposite )
 	{

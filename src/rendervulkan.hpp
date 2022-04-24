@@ -155,8 +155,13 @@ public:
 	VkImageView m_srgbView = VK_NULL_HANDLE;
 	VkImageView m_linearView = VK_NULL_HANDLE;
 
+	VkImageView m_lumaView = VK_NULL_HANDLE;
+	VkImageView m_chromaView = VK_NULL_HANDLE;
+
 	uint32_t m_width = 0, m_height = 0;
 	uint32_t m_unRowPitch = 0;
+
+	VkDeviceSize m_size = 0;
 	
 	uint32_t m_FBID = 0;
 
@@ -194,5 +199,7 @@ void vulkan_garbage_collect( void );
 bool vulkan_remake_swapchain( void );
 bool vulkan_remake_output_images( void );
 bool acquire_next_image( void );
+
+void vulkan_rgb_to_nv12( VkCommandBuffer cmdBuffer, std::shared_ptr<CVulkanTexture> pInRGB, std::shared_ptr<CVulkanTexture> pOutNV12 );
 
 struct wlr_renderer *vulkan_renderer_create( void );
