@@ -2467,6 +2467,7 @@ determine_and_apply_focus()
 
 	std::vector< unsigned long > focusable_appids;
 	std::vector< unsigned long > focusable_windows;
+	std::vector< unsigned long > focusable_windows2;
 
 	// Determine local context focuses
 	std::vector< win* > vecPossibleFocusWindows;
@@ -2508,6 +2509,12 @@ determine_and_apply_focus()
 		focusable_windows.push_back( focusable_window->id );
 		focusable_windows.push_back( focusable_window->appID );
 		focusable_windows.push_back( focusable_window->pid );
+
+		// list of [window, appid, pid, ctx_id] quadruplets
+		focusable_windows2.push_back( focusable_window->id );
+		focusable_windows2.push_back( focusable_window->appID );
+		focusable_windows2.push_back( focusable_window->pid );
+		focusable_windows2.push_back( focusable_window->ctx->xwayland_server->get_idx() );
 	}
 
 	XChangeProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeFocusableAppsAtom, XA_CARDINAL, 32, PropModeReplace,
@@ -2515,6 +2522,9 @@ determine_and_apply_focus()
 
 	XChangeProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeFocusableWindowsAtom, XA_CARDINAL, 32, PropModeReplace,
 					 (unsigned char *)focusable_windows.data(), focusable_windows.size() );
+
+	XChangeProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeFocusableWindowsV2Atom, XA_CARDINAL, 32, PropModeReplace,
+					 (unsigned char *)focusable_windows2.data(), focusable_windows2.size() );
 
 	// Determine global primary focus
 	std::stable_sort( vecPossibleFocusWindows.begin(), vecPossibleFocusWindows.end(),
@@ -4776,6 +4786,7 @@ void init_xwayland_ctx(gamescope_xwayland_server_t *xwayland_server)
 	ctx->atoms.steamStreamingClientVideoAtom = XInternAtom(ctx->dpy, "STEAM_STREAMING_CLIENT_VIDEO", false);
 	ctx->atoms.gamescopeFocusableAppsAtom = XInternAtom(ctx->dpy, "GAMESCOPE_FOCUSABLE_APPS", false);
 	ctx->atoms.gamescopeFocusableWindowsAtom = XInternAtom(ctx->dpy, "GAMESCOPE_FOCUSABLE_WINDOWS", false);
+	ctx->atoms.gamescopeFocusableWindowsV2Atom = XInternAtom(ctx->dpy, "GAMESCOPE_FOCUSABLE_WINDOWS_V2", false);
 	ctx->atoms.gamescopeFocusedAppAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_APP", false );
 	ctx->atoms.gamescopeFocusedAppGfxAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_APP_GFX", false );
 	ctx->atoms.gamescopeFocusedWindowAtom = XInternAtom( ctx->dpy, "GAMESCOPE_FOCUSED_WINDOW", false );

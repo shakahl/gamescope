@@ -696,7 +696,8 @@ int wlsession_open_kms( const char *device_name ) {
 	return device->fd;
 }
 
-gamescope_xwayland_server_t::gamescope_xwayland_server_t(wl_display *display)
+gamescope_xwayland_server_t::gamescope_xwayland_server_t(wl_display *display, int idx)
+	: idx(idx)
 {
 	struct wlr_xwayland_server_options xwayland_options = {
 		.lazy = false,
@@ -818,7 +819,7 @@ bool wlserver_init( void ) {
 
 	for (int i = 0; i < g_nXWaylandCount; i++)
 	{
-		auto server = std::make_unique<gamescope_xwayland_server_t>(wlserver.display);
+		auto server = std::make_unique<gamescope_xwayland_server_t>(wlserver.display, i);
 
 		while (!server->is_xwayland_ready()) {
 			wl_display_flush_clients(wlserver.display);

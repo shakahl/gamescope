@@ -99,6 +99,7 @@ struct xwayland_ctx_t
 		Atom steamStreamingClientVideoAtom;
 		Atom gamescopeFocusableAppsAtom;
 		Atom gamescopeFocusableWindowsAtom;
+		Atom gamescopeFocusableWindowsV2Atom;
 		Atom gamescopeFocusedWindowAtom;
 		Atom gamescopeFocusedAppAtom;
 		Atom gamescopeFocusedAppGfxAtom;

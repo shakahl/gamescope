@@ -49,6 +49,8 @@ public:
 
 	struct wl_client *get_client();
 
+	int get_idx() { return idx; }
+
 private:
 	struct wlr_xwayland_server *xwayland_server = NULL;
 	struct wl_listener xwayland_ready_listener = { .notify = xwayland_ready_callback };
@@ -57,6 +59,7 @@ private:
 
 	bool xwayland_ready = false;
 	_XDisplay *dpy = NULL;
+	int idx = 0;
 
 	std::mutex wayland_commit_lock;
 	std::vector<ResListEntry_t> wayland_commit_queue;
