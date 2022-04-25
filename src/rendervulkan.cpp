@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <thread>
+#include <vulkan/vulkan_core.h>
 
 #include "rendervulkan.hpp"
 #include "main.hpp"
@@ -24,6 +25,7 @@
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_rgb_to_nv12.h"
 
+#include "moby_deck.h"
 
 #define A_CPU
 #include "shaders/ffx_a.h"
@@ -2771,18 +2773,34 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 		vkCmdDispatch( curCommandBuffer, nGroupCountX, nGroupCountY, 1 );
 	}
 
+	int mvW = pPipeline->layerBindings[0].tex->m_width;
+	int mvH = pPipeline->layerBindings[0].tex->m_height;
+
 	// Setup motion vector stuff!
 	// Dumped here for now because texture barriers.
-	static std::shared_ptr<CVulkanTexture> pNV12Texture = nullptr;
-	if ( !pNV12Texture )
+	static struct moby_device *moby_device = moby_create_device();
+	static struct moby_context *moby_ctx = moby_create_context(moby_device);
+
+	static std::shared_ptr<CVulkanTexture> pNV12Textures[2] = { nullptr, nullptr };
+	static struct moby_bo *pNV12BOs[2] = { nullptr, nullptr };
+	static int nCurrentNV12Texture = 0;
+	
+	if ( !pNV12Textures[0] || int(pNV12Textures[0]->m_width) != mvW || int(pNV12Textures[0]->m_height) != mvH )
 	{
-		pNV12Texture = std::make_shared<CVulkanTexture>();
-		CVulkanTexture::createFlags nv12ImageFlags;
-		nv12ImageFlags.bStorage = true;
-		nv12ImageFlags.bExportable = true;
-		nv12ImageFlags.bMappable = true;
-		pNV12Texture->BInit(currentOutputWidth, currentOutputHeight, DRM_FORMAT_NV12, nv12ImageFlags);
+		for ( int i = 0; i < 2; i++ )
+		{
+			pNV12Textures[i] = std::make_shared<CVulkanTexture>();
+			CVulkanTexture::createFlags nv12ImageFlags;
+			nv12ImageFlags.bStorage = true;
+			nv12ImageFlags.bExportable = true;
+			nv12ImageFlags.bMappable = true;
+			pNV12Textures[i]->BInit(mvW, mvH, DRM_FORMAT_NV12, nv12ImageFlags);
+
+			pNV12BOs[i] = moby_import_bo(moby_device, false, pNV12Textures[i]->m_dmabuf.fd[0]);
+		}
 	}
+	
+	const std::shared_ptr<CVulkanTexture>& pNV12Texture = pNV12Textures[nCurrentNV12Texture];
 
 	vulkan_rgb_to_nv12( curCommandBuffer, pPipeline->layerBindings[0].tex, pNV12Texture );
 
@@ -2937,15 +2955,110 @@ bool vulkan_composite( struct Composite_t *pComposite, struct VulkanPipeline_t *
 	
 	vkQueueWaitIdle( queue );
 
+	static std::pair<int, int> s_LastSessionSize = { -1, -1 };
+
+    struct moby_bo *bitstream_bo = nullptr;
+    struct moby_bo *encode_ctx_bo = nullptr;
+    struct moby_bo *mv_bo = nullptr;
+
+	if ( s_LastSessionSize.first != mvW || s_LastSessionSize.second != mvH )
+	{
+		if (s_LastSessionSize.first == -1 || s_LastSessionSize.second == -1)
+		{
+			struct moby_ib *ib = moby_cmd_close_session(moby_ctx);
+			if (!moby_submit(moby_device, ib)) {
+				fprintf(stderr, "Failed to submit session close CS!\n");
+				abort();
+			}
+
+			if (!moby_wait_for_completion(moby_device, ib, UINT64_MAX)) {
+				fprintf(stderr, "Failed to wait for completion of session close.\n");
+				abort();
+			}
+		}
+
+		struct moby_ib *ib = moby_cmd_initialize_session(moby_ctx, mvW, mvH);
+		if (!moby_submit(moby_device, ib)) {
+			fprintf(stderr, "Failed to submit session init CS!\n");
+			abort();
+		}
+
+		if (!moby_wait_for_completion(moby_device, ib, UINT64_MAX)) {
+			fprintf(stderr, "Failed to wait for completion of session init.\n");
+			abort();
+		}
+
+		bitstream_bo = moby_create_dummy_bitstream_bo(moby_device, mvW, mvH);
+		encode_ctx_bo = moby_create_encode_ctx_bo(moby_device, mvW, mvH);
+		mv_bo = moby_create_mv_bo(moby_device, mvW, mvH, false, true);
+	}
+
+    struct moby_bo *nv12_bo = pNV12BOs[nCurrentNV12Texture];
+    struct moby_bo *ref_nv12_bo = pNV12BOs[!nCurrentNV12Texture];
+
+	VkDeviceSize chromaOffset;
+
+	const VkImageSubresource nv12_image_subresource = {
+		.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
+		.mipLevel = 0,
+		.arrayLayer = 0,
+	};
+	VkSubresourceLayout nv12_image_layout;
+	vkGetImageSubresourceLayout(device, pNV12Texture->m_vkImage, &nv12_image_subresource, &nv12_image_layout);
+
+	chromaOffset = nv12_image_layout.offset;
+
+    struct moby_calculate_mv_cmd cmd_data = {
+      .width         = uint32_t(mvW),
+      .height        = uint32_t(mvH),
+      .bitstream_bo  = (struct moby_offset_bo){ bitstream_bo, 0lu },
+      .feedback_bo   = (struct moby_offset_bo){ NULL, 0lu },
+      .encode_ctx_bo = (struct moby_offset_bo){ encode_ctx_bo, 0lu },
+      .luma_bo       = (struct moby_offset_bo){ nv12_bo, 0lu },
+      .chroma_bo     = (struct moby_offset_bo){ nv12_bo, chromaOffset },
+      .ref_luma_bo   = (struct moby_offset_bo){ ref_nv12_bo, 0lu },
+      .ref_chroma_bo = (struct moby_offset_bo){ ref_nv12_bo, chromaOffset },
+      .mv_bo         = (struct moby_offset_bo){ mv_bo, 0lu },
+      .use_legacy_mv = false,
+    };
+
+    struct moby_ib *ib = moby_cmd_calculate_mv(moby_ctx, &cmd_data);
+
+    if (!moby_submit(moby_device, ib)) {
+      fprintf(stderr, "Failed to submit mv calc CS!\n");
+      abort();
+    }
+    
+    if (!moby_wait_for_completion(moby_device, ib, UINT64_MAX)) {
+      fprintf(stderr, "Failed to wait for completion.\n");
+      abort();
+    }
+
 	// Dump NV12 for debugging.
+#if 0
 	static int foo = 0;
 	char name[64];
-	snprintf(name, 64, "/tmp/test_%d.bin", foo++);
-	FILE *file = fopen(name, "w");
+	snprintf(name, 64, "/tmp/test_nv12_%d.bin", foo++);
+	FILE *file = fopen(name, "wb");
 	char *data = (char*)malloc(pNV12Texture->m_size);
 	memcpy(data, pNV12Texture->m_pMappedData, pNV12Texture->m_size);
 	fwrite(data, pNV12Texture->m_size, 1, file);
 	free(data);
+#endif
+
+	// Dump MV for debugging.
+#if 1
+	static int foo = 0;
+	char name[64];
+	snprintf(name, 64, "/tmp/test_mv_%d.bin", foo++);
+	FILE *file = fopen(name, "wb");
+	char *data = (char*)malloc(moby_get_bo_size(mv_bo));
+	memcpy(data, moby_get_bo_cpu_ptr(mv_bo), moby_get_bo_size(mv_bo));
+	fwrite(data, moby_get_bo_size(mv_bo), 1, file);
+	free(data);
+#endif
+
+	nCurrentNV12Texture = !nCurrentNV12Texture;
 
 	if ( BIsNested() == false )
 	{

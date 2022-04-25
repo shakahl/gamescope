@@ -4,3 +4,6 @@
 [submodule "subprojects/libliftoff"]
 	path = subprojects/libliftoff
 	url = https://gitlab.freedesktop.org/emersion/libliftoff.git
+[submodule "subprojects/mobydeck"]
+	path = subprojects/mobydeck
+	url = git@github.com:Joshua-Ashton/moby_deck_private.git
