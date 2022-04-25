@@ -2520,7 +2520,7 @@ determine_and_apply_focus()
 	std::stable_sort( vecPossibleFocusWindows.begin(), vecPossibleFocusWindows.end(),
 					is_focus_priority_greater );
 
-	gameFocused = pick_primary_focus_and_override(&global_focus, root_ctx->focusControlWindow, vecPossibleFocusWindows, true, vecFocuscontrolAppIDs);
+	gameFocused = pick_primary_focus_and_override(&global_focus, None, vecPossibleFocusWindows, true, vecFocuscontrolAppIDs);
 
 	// Pick overlay/notifications from root ctx
 	global_focus.overlayWindow = root_ctx->focus.overlayWindow;
