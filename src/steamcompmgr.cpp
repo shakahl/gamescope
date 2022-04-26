@@ -2134,7 +2134,7 @@ found:;
 		}
 	};
 
-	if ( focus )
+	if ( focus && !focusControlWindow )
 	{
 		// Do some searches through game windows to follow transient links if needed
 		while ( true )
