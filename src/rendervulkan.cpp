@@ -1298,8 +1298,37 @@ retry:
 
 		drmFreeDevices( drmDevices, drmDevicesLen );
 	} else {
-		vk_log.errorf( "physical device doesn't support VK_EXT_physical_device_drm nor VK_EXT_pci_bus_info" );
-		return false;
+		drmDevice *drmDevices[32];
+		int drmDevicesLen = drmGetDevices2(0, drmDevices, sizeof(drmDevices) / sizeof(drmDevices[0]));
+		if (drmDevicesLen < 0) {
+			vk_log.errorf_errno("drmGetDevices2 failed");
+			return false;
+		}
+
+		drmDevice *match = nullptr;
+		for ( int i = 0; i < drmDevicesLen; i++ ) {
+			drmDevice *drmDev = drmDevices[ i ];
+			if ( !( drmDev->available_nodes & ( 1 << DRM_NODE_RENDER ) ) )
+				continue;
+			if ( drmDev->bustype != DRM_BUS_PCI )
+				continue;
+
+			if ( true ) {
+				match = drmDev;
+				break;
+			}
+		}
+		if (match == nullptr) {
+			vk_log.errorf("failed to find DRM device from PCI bus info");
+		}
+
+		g_drmRenderFd = open( match->nodes[ DRM_NODE_RENDER ], O_RDWR | O_CLOEXEC );
+		if ( g_drmRenderFd < 0 ) {
+			vk_log.errorf_errno( "failed to open DRM render node" );
+			return false;
+		}
+
+		drmFreeDevices( drmDevices, drmDevicesLen );
 	}
 
 	if ( g_vulkanSupportsModifiers && !supportsForeignQueue && !BIsNested() ) {
