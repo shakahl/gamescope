@@ -119,6 +119,7 @@ struct xwayland_ctx_t
 
 		Atom gamescopeColorLinearGain;
 		Atom gamescopeColorGain;
+		Atom gamescopeColorMatrix;
 		Atom gamescopeColorLinearGainBlend;
 
 		Atom gamescopeXWaylandModeControl;
