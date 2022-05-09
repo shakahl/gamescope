@@ -29,6 +29,7 @@
  *   says above. Not that I can really do anything about it
  */
 
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <cstdint>
 #include <memory>
@@ -124,6 +125,42 @@ struct commit_t
 	bool done = false;
 };
 
+#define MWM_HINTS_FUNCTIONS   1
+#define MWM_HINTS_DECORATIONS 2
+#define MWM_HINTS_INPUT_MODE  4
+#define MWM_HINTS_STATUS      8
+
+#define MWM_FUNC_ALL          0x01
+#define MWM_FUNC_RESIZE       0x02
+#define MWM_FUNC_MOVE         0x04
+#define MWM_FUNC_MINIMIZE     0x08
+#define MWM_FUNC_MAXIMIZE     0x10
+#define MWM_FUNC_CLOSE        0x20
+
+#define MWM_DECOR_ALL         0x01
+#define MWM_DECOR_BORDER      0x02
+#define MWM_DECOR_RESIZEH     0x04
+#define MWM_DECOR_TITLE       0x08
+#define MWM_DECOR_MENU        0x10
+#define MWM_DECOR_MINIMIZE    0x20
+#define MWM_DECOR_MAXIMIZE    0x40
+
+#define MWM_INPUT_MODELESS                  0
+#define MWM_INPUT_PRIMARY_APPLICATION_MODAL 1
+#define MWM_INPUT_SYSTEM_MODAL              2
+#define MWM_INPUT_FULL_APPLICATION_MODAL    3
+#define MWM_INPUT_APPLICATION_MODAL         1
+
+#define MWM_TEAROFF_WINDOW 1
+
+struct motif_hints_t
+{
+	unsigned long flags;
+	unsigned long functions;
+	unsigned long decorations;
+	long input_mode;
+};
+
 struct win {
 	struct win		*next;
 	Window		id;
@@ -154,6 +191,8 @@ struct win {
 	unsigned int requestedHeight;
 	bool is_dialog;
 	bool maybe_a_dropdown;
+
+	motif_hints_t *motif_hints;
 
 	Window transientFor;
 
@@ -1982,20 +2021,31 @@ win_skip_taskbar_and_pager( win *w )
 static bool
 win_maybe_a_dropdown( win *w )
 {
-	// Josh:
-	// The logic here is as follows. The window will be treated as a dropdown if:
-	// 
-	// If this window has a fixed position on the screen + static gravity:
-	//  - If the window has either skipPage or skipTaskbar
-	//    - If the window isn't a dialog, always treat it as a dropdown, as it's
-	//      probably meant to be some form of popup.
-	//    - If the window is a dialog 
-	// 		- If the window has transient for, disregard it, as it is trying to redirecting us elsewhere
-	//        ie. a settings menu dialog popup or something.
-	//      - If the window has both skip taskbar and pager, treat it as a dialog.
-	bool valid_maybe_a_dropdown =
-		w->maybe_a_dropdown && ( ( !w->is_dialog || ( !w->transientFor && win_skip_taskbar_and_pager( w ) ) ) && ( w->skipPager || w->skipTaskbar ) );
-	return ( valid_maybe_a_dropdown || win_is_override_redirect( w ) ) && !win_is_useless( w );
+	// If we are an override, then we are a dropdown.
+	if ( win_is_override_redirect( w ) )
+		return !win_is_useless( w );
+
+	// If we don't think this window is maybe a dropdown,
+	// early out here.
+	if ( !w->maybe_a_dropdown )
+		return false;
+
+	// If we aren't a dialog, and we have skipPager + skipTaskbar
+	// we are probably a dropdown.
+	if ( !w->is_dialog && ( w->skipPager || w->skipTaskbar ) )
+		return !win_is_useless( w );
+
+	// If we aren't transientFor and we have both win_skip_taskbar_and_pager
+	// then we are probably a dropdown.
+	if ( !w->transientFor && win_skip_taskbar_and_pager( w ) )
+		return !win_is_useless( w );
+
+	// If we have motif hints that say we don't have a border, and we are skipping
+	// the taskbar, then we are probably a dropdown.
+	if ( w->motif_hints && !( w->motif_hints->decorations & MWM_DECOR_BORDER ) && w->skipTaskbar )
+		return !win_is_useless( w );
+
+	return false;
 }
 
 /* Returns true if a's focus priority > b's.
@@ -2793,6 +2843,20 @@ get_size_hints(xwayland_ctx_t *ctx, win *w)
 }
 
 static void
+get_motif_hints( xwayland_ctx_t *ctx, win *w )
+{
+	if ( w->motif_hints )
+		XFree( w->motif_hints );
+
+	Atom actual_type;
+	int actual_format;
+	unsigned long nitems, bytesafter;
+	XGetWindowProperty(ctx->dpy, w->id, ctx->atoms.motifWMHints, 0L, 20L, False,
+		ctx->atoms.motifWMHints, &actual_type, &actual_format, &nitems,
+		&bytesafter, (unsigned char **)&w->motif_hints );
+}
+
+static void
 get_win_title(xwayland_ctx_t *ctx, win *w, Atom atom)
 {
 	assert(atom == XA_WM_NAME || atom == ctx->atoms.netWMNameAtom);
@@ -2906,6 +2970,7 @@ map_win(xwayland_ctx_t* ctx, Window id, unsigned long sequence)
 	w->isExternalOverlay = get_prop(ctx, w->id, ctx->atoms.externalOverlayAtom, 0);
 
 	get_size_hints(ctx, w);
+	get_motif_hints(ctx, w);
 
 	get_net_wm_state(ctx, w);
 
@@ -3124,6 +3189,8 @@ add_win(xwayland_ctx_t *ctx, Window id, Window prev, unsigned long sequence)
 	new_win->isSteamStreamingClientVideo = false;
 	new_win->inputFocusMode = 0;
 	new_win->is_dialog = false;
+	new_win->maybe_a_dropdown = false;
+	new_win->motif_hints = nullptr;
 
 	if ( steamMode == true )
 	{
@@ -3800,6 +3867,14 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 				get_win_title(ctx, w, ev->atom);
 				sdlwindow_title( w->title );
 			}
+		}
+	}
+	if (ev->atom == ctx->atoms.motifWMHints)
+	{
+		win *w = find_win(ctx, ev->window);
+		if (w) {
+			get_motif_hints(ctx, w);
+			focusDirty = true;
 		}
 	}
 	if ( ev->atom == ctx->atoms.gamescopeTuneableVBlankRedZone )
@@ -4790,6 +4865,7 @@ void init_xwayland_ctx(gamescope_xwayland_server_t *xwayland_server)
 	ctx->atoms.WMStateAtom = XInternAtom(ctx->dpy, "WM_STATE", false);
 	ctx->atoms.utf8StringAtom = XInternAtom(ctx->dpy, "UTF8_STRING", false);
 	ctx->atoms.netWMNameAtom = XInternAtom(ctx->dpy, "_NET_WM_NAME", false);
+	ctx->atoms.motifWMHints = XInternAtom(ctx->dpy, "_MOTIF_WM_HINTS", false);
 	ctx->atoms.netSystemTrayOpcodeAtom = XInternAtom(ctx->dpy, "_NET_SYSTEM_TRAY_OPCODE", false);
 	ctx->atoms.steamStreamingClientAtom = XInternAtom(ctx->dpy, "STEAM_STREAMING_CLIENT", false);
 	ctx->atoms.steamStreamingClientVideoAtom = XInternAtom(ctx->dpy, "STEAM_STREAMING_CLIENT_VIDEO", false);
