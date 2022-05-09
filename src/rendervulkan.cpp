@@ -502,9 +502,17 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t drmFormat,
 		else
 		{
 			const struct wlr_drm_format *drmFormatDesc = wlr_drm_format_set_get( &g_DRM.primary_formats, drmFormat );
-			assert( drmFormatDesc != nullptr );
-			possibleModifiers = drmFormatDesc->modifiers;
-			numPossibleModifiers = drmFormatDesc->len;
+			if ( drmFormatDesc )
+			{
+				possibleModifiers = drmFormatDesc->modifiers;
+				numPossibleModifiers = drmFormatDesc->len;
+			}
+			else
+			{
+				// VIRGL hack!
+				possibleModifiers = &linear;
+				numPossibleModifiers = 1;
+			}
 		}
 
 		for ( size_t i = 0; i < numPossibleModifiers; i++ )
