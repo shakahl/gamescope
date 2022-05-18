@@ -3542,7 +3542,5 @@ void vulkan_rgb_to_nv12( VkCommandBuffer commandBuffer, std::shared_ptr<CVulkanT
 	vkCmdBindDescriptorSets( commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineDesc.pipelineLayout, 0, 1, &pipelineDesc.descriptorSets[pipelineDesc.nCurrentDescriptorSet], 0, NULL);
 	pipelineDesc.nCurrentDescriptorSet = ( pipelineDesc.nCurrentDescriptorSet + 1 ) % 3;
 
-	#define MOBY_ALIGN(value, alignment)    (((value) + alignment - 1) & ~(alignment - 1))
-
 	vkCmdDispatch( commandBuffer, MOBY_ALIGN(halfExtent[0], 8), MOBY_ALIGN(halfExtent[1], 8), 1);
 }

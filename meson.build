@@ -23,6 +23,9 @@ add_project_arguments(cppc.get_supported_arguments([
   '-Wno-invalid-offsetof'
 ]), language: 'cpp')
 
+add_global_link_arguments('-static-libgcc', language: 'c')
+add_global_link_arguments('-static-libgcc', '-static-libstdc++', language: 'cpp')
+
 dep_x11 = dependency('x11')
 dep_xdamage = dependency('xdamage')
 dep_xcomposite = dependency('xcomposite')
