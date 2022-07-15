@@ -162,6 +162,9 @@ struct wlserver_output_info {
 	const char *name;
 	const char *description;
 	int phys_width, phys_height; // millimeters
+
+	int current_width, current_height; // px
+	int current_refresh; // hz
 };
 
 void wlserver_set_output_info( const wlserver_output_info *info );

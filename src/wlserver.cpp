@@ -70,6 +70,9 @@ static void wlserver_surface_set_wlr( struct wlserver_surface *surf, struct wlr_
 
 extern const struct wlr_surface_role xwayland_surface_role;
 
+extern int g_nPreferredOutputWidth;
+extern int g_nPreferredOutputHeight;
+
 std::vector<ResListEntry_t> gamescope_xwayland_server_t::retrieve_commits()
 {
 	std::vector<ResListEntry_t> commits;
@@ -532,6 +535,7 @@ void wlserver_set_output_info( const wlserver_output_info *info )
 	wlr_output_set_description(wlserver.wlr.output, info->description);
 	wlserver.wlr.output->phys_width = info->phys_width;
 	wlserver.wlr.output->phys_height = info->phys_height;
+	wlr_output_set_custom_mode(wlserver.wlr.output, info->current_width, info->current_height, info->current_refresh);
 
 	wlr_output_create_global(wlserver.wlr.output);
 }
@@ -542,13 +546,28 @@ bool wlsession_init( void ) {
 	wlserver.display = wl_display_create();
 	wlserver.wlr.headless_backend = wlr_headless_backend_create( wlserver.display );
 
-	wlserver.wlr.output = wlr_headless_add_output( wlserver.wlr.headless_backend, 1280, 720 );
+	int output_width = 1280;
+	int output_height = 720;
+	int output_refresh = 60;
+	// Josh: If we are nested, update with the
+	// nested width/height here, as otherwise it is gotten by DRM.
+	if ( BIsNested() )
+	{
+		output_width = g_nPreferredOutputWidth;
+		output_height = g_nPreferredOutputHeight;
+		output_refresh = g_nNestedRefresh;
+	}
+	wlserver.wlr.output = wlr_headless_add_output( wlserver.wlr.headless_backend, output_width, output_height );
 	strncpy(wlserver.wlr.output->make, "gamescope", sizeof(wlserver.wlr.output->make));
 	strncpy(wlserver.wlr.output->model, "gamescope", sizeof(wlserver.wlr.output->model));
 
 	const struct wlserver_output_info output_info = {
 		.name = "Virtual-1",
 		.description = "Virtual gamescope output",
+
+		.current_width = output_width,
+		.current_height = output_height,
+		.current_refresh = output_refresh,
 	};
 	wlserver_set_output_info( &output_info );
 

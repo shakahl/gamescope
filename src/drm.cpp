@@ -598,6 +598,9 @@ static bool setup_best_connector(struct drm_t *drm)
 		.description = best->name,
 		.phys_width = (int) best->connector->mmWidth,
 		.phys_height = (int) best->connector->mmHeight,
+		.current_width = (int) mode->hdisplay,
+		.current_height = (int) mode->vdisplay,
+		.current_refresh = (int) mode->vrefresh,
 	};
 	wlserver_set_output_info(&wlserver_output_info);
 
