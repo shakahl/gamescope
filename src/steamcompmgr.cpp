@@ -1715,6 +1715,9 @@ paint_all()
 		frameInfo.useNISLayer0 = false;
 	}
 
+	frameInfo.blurRadius = kMaxBlurRadius - 1;
+	frameInfo.blurBackgrounds = true;
+
 	g_bFSRActive = frameInfo.useFSRLayer0;
 
 	bool bWasFirstFrame = g_bFirstFrame;

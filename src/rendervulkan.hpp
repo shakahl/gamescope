@@ -161,6 +161,7 @@ struct FrameInfo_t
 	bool useFSRLayer0;
 	bool useNISLayer0;
 	BlurMode blurLayer0;
+	bool blurBackgrounds;
 	int blurRadius;
 
 

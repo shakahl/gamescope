@@ -18,12 +18,14 @@ uniform layers_t {
     uint u_frameId;
 };
 
+#define BLUR_DONT_SCALE 1
 #include "composite.h"
+#include "blur.h"
 
-vec4 sampleLayer(uint layerIdx, vec2 uv) {
+vec4 sampleLayer(uint layerIdx, vec2 uv, bool onlyBoundsAlpha) {
     if ((c_ycbcrMask & (1 << layerIdx)) != 0)
-        return srgbToLinear(sampleLayer(s_ycbcr_samplers[layerIdx], layerIdx, uv, false));
-    return sampleLayer(s_samplers[layerIdx], layerIdx, uv, true);
+        return srgbToLinear(sampleLayer(s_ycbcr_samplers[layerIdx], layerIdx, uv, false, onlyBoundsAlpha));
+    return sampleLayer(s_samplers[layerIdx], layerIdx, uv, true, onlyBoundsAlpha);
 }
 
 void main() {
@@ -39,11 +41,64 @@ void main() {
     if (c_compositing_debug)
         outputValue = vec3(1.0f, 0.0f, 0.0f);
 
-    if (c_layerCount > 0)
-        outputValue = sampleLayer(0, uv).rgb * u_opacity[0];
+    if (c_blur_background)
+    {
+#if 0
+        // Tried this, wasnt a fan of it.
+        // Scales up and centres.
+        vec2 imageSize = vec2(textureSize(s_samplers[0], 0).xy);
+        vec2 imageBlurScaleVec = vec2(outSize.xy) / imageSize;
+        float imageBlurScale = 1.0f;
+        vec2 imageBlurOffset = vec2(0.0f);
+        if (imageBlurScaleVec.x > imageBlurScaleVec.y)
+        {
+            imageBlurScale = imageBlurScaleVec.x;
+            imageBlurOffset = vec2(0.0f, ( outSize.y - imageSize.y * ( imageBlurScaleVec.x / imageBlurScaleVec.y) ) / 2.0f);
+        }
+        else
+        {
+            imageBlurScale = imageBlurScaleVec.y;
+            imageBlurOffset = vec2(0.0f, ( outSize.x - imageSize.x * ( imageBlurScaleVec.y / imageBlurScaleVec.x) ) / 2.0f);
+        }
+
+        vec2 blurUV = uv;
+        blurUV /= u_scale[0];
+        blurUV /= imageBlurScale;
+        blurUV -= u_offset[0];
+        blurUV += imageBlurOffset / u_scale[0];
+
+        outputValue = gaussian_blur(s_samplers[VKR_BLUR_BACKGROUND_SLOT], 0, blurUV, c_blur_radius, true, true).rgb;
+        vec4 layerColor = sampleLayer(0, uv, true) * u_opacity[0];
+        float layerAlpha = layerColor.a;
+
+        if (c_layerCount > 0)
+            outputValue = layerColor.rgb + outputValue * (1.0f - layerAlpha);
+#else
+        // Does stretch, seems better.
+        vec2 imageSize = vec2(textureSize(s_samplers[0], 0).xy);
+        vec2 imageBlurScaleVec = vec2(outSize.xy) / imageSize;
+
+        vec2 blurUV = uv;
+        blurUV /= u_scale[0];
+        blurUV /= imageBlurScaleVec;
+        blurUV -= u_offset[0];
+
+        outputValue = gaussian_blur(s_samplers[VKR_BLUR_BACKGROUND_SLOT], 0, blurUV, c_blur_radius, true, true).rgb;
+        vec4 layerColor = sampleLayer(0, uv, true) * u_opacity[0];
+        float layerAlpha = layerColor.a;
+
+        if (c_layerCount > 0)
+            outputValue = layerColor.rgb + outputValue * (1.0f - layerAlpha);
+#endif  
+    }
+    else
+    {
+        if (c_layerCount > 0)
+            outputValue = sampleLayer(0, uv, false).rgb * u_opacity[0];
+    }
 
     for (int i = 1; i < c_layerCount; i++) {
-        vec4 layerColor = sampleLayer(i, uv);
+        vec4 layerColor = sampleLayer(i, uv, false);
         // wl_surfaces come with premultiplied alpha, so that's them being
         // premultiplied by layerColor.a.
         // We need to then multiply that by the layer's opacity to get to our

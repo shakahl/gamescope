@@ -46,13 +46,17 @@ void compositing_debug(uvec2 coord) {
     }
 }
 
-vec4 sampleLayer(sampler2D layerSampler, uint layerIdx, vec2 uv, bool unnormalized) {
+vec4 sampleLayer(sampler2D layerSampler, uint layerIdx, vec2 uv, bool unnormalized, bool onlyBoundsAlpha) {
     vec2 coord = ((uv + u_offset[layerIdx]) * u_scale[layerIdx]);
     vec2 texSize = textureSize(layerSampler, 0);
 
     if (coord.x < 0.0f       || coord.y < 0.0f ||
         coord.x >= texSize.x || coord.y >= texSize.y) {
-        float border = (u_borderMask & (1u << layerIdx)) != 0 ? 1.0f : 0.0f;
+        float border;
+        if (onlyBoundsAlpha)
+            border = 0.0f;
+        else
+            border = (u_borderMask & (1u << layerIdx)) != 0 ? 1.0f : 0.0f;
 
         if (c_compositing_debug)
             return vec4(vec3(1.0f, 0.0f, 1.0f) * border, border);
@@ -63,5 +67,12 @@ vec4 sampleLayer(sampler2D layerSampler, uint layerIdx, vec2 uv, bool unnormaliz
     if (!unnormalized)
         coord /= texSize;
 
-    return textureLod(layerSampler, coord, 0.0f);
+    vec4 color = textureLod(layerSampler, coord, 0.0f);
+    if (onlyBoundsAlpha)
+        color.a = 1.0f;
+    return color;
+}
+
+vec4 sampleLayer(sampler2D layerSampler, uint layerIdx, vec2 uv, bool unnormalized) {
+    return sampleLayer(layerSampler, layerIdx, uv, unnormalized, false);
 }
