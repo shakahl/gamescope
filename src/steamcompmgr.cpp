@@ -687,7 +687,7 @@ destroy_buffer( struct wl_listener *listener, void * )
 
 	if ( entry->fb_id != 0 )
 	{
-		drm_drop_fbid( &g_DRM, entry->fb_id );
+		//drm_drop_fbid( &g_DRM, entry->fb_id );
 	}
 
 	wl_list_remove( &entry->listener.link );

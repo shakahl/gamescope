@@ -230,7 +230,7 @@ static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsi
 				{
 					drm_verbose_log.debugf( "deferred free %u", previous_fbid );
 
-					drm_drop_fbid( &g_DRM, previous_fbid );
+					//drm_drop_fbid( &g_DRM, previous_fbid );
 
 					g_DRM.fbid_free_queue.erase( g_DRM.fbid_free_queue.begin() + i );
 					break;
