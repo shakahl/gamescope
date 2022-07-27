@@ -73,6 +73,10 @@ struct connector {
 	char make_pnp[4];
 	char *make;
 	char *model;
+
+	struct {
+		uint32_t crtc_id;
+	} current, pending;
 };
 
 struct fb {
