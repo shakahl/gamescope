@@ -1757,6 +1757,7 @@ paint_all()
 	bNeedsComposite |= frameInfo.blurLayer0;
 	bNeedsComposite |= bNeedsNearest;
 	bNeedsComposite |= bDrewCursor;
+	bNeedsComposite |= frameInfo.layerCount > 2;
 
 	if ( !bNeedsComposite )
 	{
