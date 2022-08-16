@@ -1203,9 +1203,9 @@ retry:
 	bool supportsFp16 = false;
 	for ( uint32_t i = 0; i < supportedExtensionCount; ++i )
 	{
-		if ( strcmp(vecSupportedExtensions[i].extensionName,
-		     VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) == 0 )
-			g_vulkanSupportsModifiers = true;
+		//if ( strcmp(vecSupportedExtensions[i].extensionName,
+		//     VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) == 0 )
+		//	g_vulkanSupportsModifiers = true;
 
 		if ( strcmp(vecSupportedExtensions[i].extensionName,
 		            VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME) == 0 )
